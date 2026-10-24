@@ -73,15 +73,18 @@ def tw1_static_equilibrium(tau=F(1, 2), f1=F(1, 4), E1=F(1, 4)) -> dict:
               all_r_dominates, tau > f1),
     ]
     results = {"delta_at_zero": delta_at_zero, "all_a_is_ne": all_a_is_ne,
-               "all_r_dominates_pareto": all_r_dominates}
+               "all_r_dominates_pareto": all_r_dominates,
+               "payoffs_relative_to_offline": {"all_R": {"stay": F(0), "deviate": -tau},
+                                               "all_A": {"stay": f1 - tau, "deviate": -E1}},
+               "pareto_gap_all_R": tau - f1}
     conclusion = ["Nobody moves first: the lone deviator absorbs the whole exclusion cost, "
                   "even though restricting together is better for every family."]
     return result("tw1", "Tw. 1 - static trap", {"tau": tau, "f1": f1, "E1": E1},
                   results, checks, conclusion)
 
 
-def tw1_1_screen_time_cap(a=F(1), b=F(1), T=F(4), beta=F(1)) -> dict:
-    a, b, T, beta = (frac(x, n) for x, n in ((a, "a"), (b, "b"), (T, "T"), (beta, "beta")))
+def tw1_1_screen_time_cap(a=F(1), b=F(1), T=F(4), beta=F(1), k=F(1, 2)) -> dict:
+    a, b, T, beta, k = (frac(x, n) for x, n in ((a, "a"), (b, "b"), (T, "T"), (beta, "beta"), (k, "k")))
     if min(a, b, T, beta) <= 0:
         raise ValueError("a, b, T and beta must be positive")
     if a + beta > 2 * b * T:
@@ -97,7 +100,6 @@ def tw1_1_screen_time_cap(a=F(1), b=F(1), T=F(4), beta=F(1)) -> dict:
     t_fb_num = simplify(t_fb.subs(values))
     t_ne_num = simplify(t_ne.subs(values))
     loss = simplify(B * (t_ne - t_fb) ** 2).subs(values)
-
     checks = [
         check("V(t_FB) - V(t_NE) = b (t_NE - t_FB)^2", identity == 0, 0, identity),
         check("the network-coupled optimum exceeds the first best", t_ne_num > t_fb_num, "> t_FB", t_ne_num),
@@ -106,9 +108,13 @@ def tw1_1_screen_time_cap(a=F(1), b=F(1), T=F(4), beta=F(1)) -> dict:
         checks.append(check("paper: t_FB = 1/2, t_NE = 4/7, welfare loss = 1/196",
                             (t_fb_num, t_ne_num, loss) == (sp(F(1, 2)), sp(F(4, 7)), sp(F(1, 196))),
                             "(1/2, 4/7, 1/196)", (t_fb_num, t_ne_num, loss)))
+    curve_t = [F(i, 20) for i in range(21)]
     results = {"t_first_best": F(int(sp(t_fb_num).p), int(sp(t_fb_num).q)),
                "t_nash": F(int(sp(t_ne_num).p), int(sp(t_ne_num).q)),
-               "welfare_loss": F(int(sp(loss).p), int(sp(loss).q))}
+               "welfare_loss": F(int(sp(loss).p), int(sp(loss).q)),
+               "curve_t": curve_t,
+               "curve_V": [a * t - b * t * t for t in curve_t],
+               "curve_G": [a * t - b * t * t - beta * k * (T - t) for t in curve_t]}
     conclusion = ["A parent sets a stricter screen-time limit than it would choose alone, "
                   "because exclusion from the peer group hurts the child more than screen time does."]
     return result("tw1_1", "Tw. 1.1 - local screen-time cap under network effects",
@@ -165,7 +171,8 @@ def tw2_cascade(eps=EPS, p_slope=F(100), f_lo=F(5), f_hi=F(95)) -> dict:
                             (analytic, rounds, const) == (F(1), 19, F(1, 20)),
                             "(1, 19, 1/20)", (analytic, rounds, const)))
     results = {"limit": analytic, "rounds_to_full_adoption": rounds,
-               "phi_minus_k_on_linear_region": const if slope == 0 else None}
+               "phi_minus_k_on_linear_region": const if slope == 0 else None,
+               "uniform_q_mean": eps + (1 - eps) / 2}
     conclusion = ["Pressure compounds: once adoption starts, the cascade runs to the whole cohort."]
     return result("tw2", "Tw. 2 - cascade and least fixed point",
                   {"eps": eps, "p_slope": p_slope, "f_lo": f_lo, "f_hi": f_hi},
@@ -287,6 +294,7 @@ def tw5_coalition_thresholds(tau=F(3, 2), n=10, d=1) -> dict:
         checks.append(check("paper: m_out = 4 and m_stab = 5", (m_out, m_stab) == (4, 5), "(4, 5)",
                             (m_out, m_stab)))
     results = {"m_out": m_out, "m_stab": m_stab, "k_star": str(k_star),
+               "k_star_decimal": f"{float(k_star):.2f}".replace(".", ","),
                "P_peer_5_of_9": P59, "P_peer_6_of_9": P69}
     conclusion = ["A pact always misses by one family: the outsider counts pressure without counting "
                   "itself, so the pact that first tempts the rest is the pact its members want to leave."]
@@ -343,6 +351,25 @@ def tw6_coalition_continuum(gamma=F(9, 40), eps=EPS, p_slope=F(100), f_lo=F(5), 
     return result("tw6", "Tw. 6 - coalitions in the continuum",
                   {"gamma": gamma, "eps": eps, "p_slope": p_slope, "f_lo": f_lo, "f_hi": f_hi},
                   results, checks, conclusion)
+
+
+def linear_threshold(tau=F(3, 2), slope=F(4)) -> F:
+    """Threshold k where a linear pressure P(k) = slope * k crosses the level tau."""
+    tau, slope = frac(tau, "tau"), frac(slope, "slope")
+    if slope <= 0:
+        raise ValueError("slope must be positive")
+    return tau / slope
+
+
+def cascade_limit(lam=F(1, 5), eta=F(0), eps=EPS, step=F(1, 20)) -> F:
+    """Limit of the cascade under a pressure reduction, exact for any parameters."""
+    lam, eta, eps, step = frac(lam, "lam"), frac(eta, "eta"), frac(eps, "eps"), frac(step, "step")
+    if not 0 <= eta < 1:
+        raise ValueError("eta must lie in [0, 1)")
+    lam_eff = lam * (1 - eta)
+    if lam_eff <= 0:
+        return min(F(1), max(eps, step))
+    return min(F(1), max(eps, step / lam_eff))
 
 
 def tw7_pressure_reduction(lam=F(1, 5), eta=F(0), eps=EPS, step=F(1, 20)) -> dict:
