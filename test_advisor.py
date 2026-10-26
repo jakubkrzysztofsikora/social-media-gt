@@ -645,3 +645,39 @@ def test_conclusions_are_domain_neutral_for_every_scenario():
         assert len(rendered) == len(result["conclusion"]), scenario_id
         for sentence in rendered:
             assert not any(word in sentence.lower() for word in banned), (scenario_id, sentence)
+
+
+def test_param_notes_are_domain_neutral_on_clamp():
+    banned = ("parent", "social media", "screen", "famil")
+    result = advisor.run_one_scenario("tw5", {"d": 99})
+    assert result["param_notes"], "clamp note expected"
+    report = {"situation_summary": "s", "scenarios": [result],
+              "totals": {"scenarios": 1, "ok": 0, "errors": 1,
+                         "checks_total": len(result["checks"]), "checks_failed": 0}}
+    markdown = advisor.render_report(report)
+    notes = [line[2:] for line in markdown.splitlines() if line.startswith("- ")]
+    assert notes, "parameter notes expected in markdown"
+    for note in notes:
+        assert not any(word in note.lower() for word in banned), note
+
+
+def test_calibration_caveat_appended_only_on_deviation():
+    caveat_word = "calibration"
+    deviated = advisor.run_one_scenario("tw1", {"tau": "1/3"})
+    assert any(caveat_word in sentence for sentence in deviated["conclusion"])
+    assert any("tau" in sentence for sentence in deviated["conclusion"] if caveat_word in sentence)
+    baseline = advisor.run_one_scenario("tw1", {})
+    assert not any(caveat_word in sentence for sentence in baseline["conclusion"])
+
+
+def test_mapping_block_ignores_placeholder_vocabulary():
+    report = {"situation_summary": "s",
+              "vocabulary": {"players": "Who the players are, in the user's words",
+                             "decision": "canal maintenance shifts",
+                             "cooperation": None, "defection": ""},
+              "scenarios": [], "totals": {}}
+    markdown = advisor.render_report(report)
+    assert "canal maintenance shifts" in markdown
+    assert "Players:" not in markdown
+    assert "Cooperating:" not in markdown
+    assert "Defecting:" not in markdown

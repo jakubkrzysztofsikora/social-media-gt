@@ -409,7 +409,7 @@ def normalize_params(scenario_id: str, raw: Mapping[str, object]) -> tuple[dict[
         _clamp(values, notes, "n", Fraction(2), None, "cohort size must stay at least 2")
         _round_to_int(values, notes, "d")
         _clamp(values, notes, "d", Fraction(0), values["n"] - 1,
-               "unaware families must stay between 0 and n - 1")
+               "unaware members must stay between 0 and n - 1")
 
     if scenario_id == "tw6":
         _clamp(values, notes, "gamma", Fraction(1, 1000), Fraction(999, 1000),
@@ -518,8 +518,11 @@ def build_system_prompt() -> str:
         "E1 in tw1 and f1 or E1 in tw3_2.",
         "- A stated screen-time limit becomes T in tw1_1.",
         "- Prefer a number stated in the conversation over the paper default.",
-        "- Every number stated in the conversation MUST be copied into at least one mapped "
-        "parameter; never return the paper default for a parameter the conversation quantifies.",
+        "- Every number stated in the conversation that matches a parameter's meaning MUST be "
+        "copied into that parameter; never return the paper default for a parameter the "
+        "conversation quantifies.",
+        "- If a stated number matches no parameter's meaning, leave it unmapped instead of "
+        "forcing it into an unrelated parameter.",
         "- situation_summary and vocabulary MUST describe the user's own situation: their "
         "players, actions and setting. Describe the paper's social-media example only when the "
         "user's situation is about social media.",
@@ -700,6 +703,14 @@ def run_one_scenario(scenario_id: str, raw: Mapping[str, object] | None = None) 
     entry["checks"] = result["checks"]
     entry["conclusion"] = [_neutral_conclusion(str(sentence))
                            for sentence in result["conclusion"]]
+    deviating = sorted(name for name, value in normalized.items()
+                       if name in CATALOG[scenario_id]["params"]
+                       and value != to_fraction(CATALOG[scenario_id]["params"][name]["default"]))
+    if deviating:
+        entry["conclusion"].append(
+            "Parameters were mapped from the conversation; narrative numbers quoted from "
+            "the paper's default calibration may not match the values above (differing: "
+            f"{', '.join(deviating)}).")
     if any(not check["ok"] for check in entry["checks"]):
         entry["status"] = "error"
         entry["error"] = "one or more verification checks failed"
@@ -884,6 +895,14 @@ def _neutral_conclusion(sentence: str) -> str:
     return sentence
 
 
+_VOCABULARY_PLACEHOLDERS = {
+    "who the players are, in the user's words",
+    "the decision each player makes, in the user's words",
+    "what cooperating looks like, in the user's words",
+    "what defecting looks like, in the user's words",
+}
+
+
 def render_report(report: Mapping[str, Any]) -> str:
     """Render the report as Markdown."""
     lines = ["# Situation analysis", ""]
@@ -897,7 +916,8 @@ def render_report(report: Mapping[str, Any]) -> str:
     mapping = [(label, vocabulary.get(key))
                for label, key in (("Players", "players"), ("Decision", "decision"),
                                   ("Cooperating", "cooperation"), ("Defecting", "defection"))]
-    mapping = [(label, value) for label, value in mapping if value]
+    mapping = [(label, value) for label, value in mapping
+               if value and str(value).strip().lower() not in _VOCABULARY_PLACEHOLDERS]
     if mapping:
         lines.append("## Mapping")
         lines.append("")
