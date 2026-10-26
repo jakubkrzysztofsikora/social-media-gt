@@ -745,13 +745,72 @@ def _contains_long_list(value: Any, limit: int = 8) -> bool:
     return False
 
 
+_PLAIN_RESULT_LABELS = {
+    "delta_at_zero": "the payoff difference at the start",
+    "all_a_is_ne": "whether everyone adopting is stable",
+    "all_r_dominates_pareto": "whether restricting together beats adopting together",
+    "payoffs_relative_to_offline": "the payoffs compared with staying out",
+    "pareto_gap_all_R": "the welfare gap between the two profiles",
+    "t_first_best": "the best outcome for a single actor",
+    "t_nash": "the outcome each actor picks in equilibrium",
+    "welfare_loss": "the welfare lost to the interaction",
+    "limit": "the level the process converges to",
+    "rounds_to_full_adoption": "the number of rounds until everyone joins",
+    "uniform_q_mean": "the average outcome over uniform starting shares",
+    "equilibria_count": "the number of stable profiles",
+    "all_a_is_equilibrium": "whether everyone adopting is stable",
+    "delta_at_all_a": "the advantage of staying when everyone joins",
+    "tau_risk_dominant": "the cost threshold where the safer choice wins",
+    "pareto_trap_class_nonempty": "whether the trap profile exists",
+    "pareto_gap_at_midpoint": "the welfare gap at the midpoint",
+    "m_out": "how many members the pact needs before an outsider defects",
+    "m_stab": "how many members keep the pact stable",
+    "k_star": "the critical share of participants",
+    "P_peer_5_of_9": "the chance five of nine participants follow the rule",
+    "P_peer_6_of_9": "the chance six of nine participants follow the rule",
+    "K": "the level held after the pact starts",
+    "trajectory": "the path the level takes over time",
+    "exit_multiplier": "how strongly the pact decays when it ends",
+    "release_steps": "how many rounds until the level recovers",
+    "eta_critical": "the share of the group that makes the rule bite",
+    "lambda_effective": "the pressure the rule creates",
+    "lambda_reg": "the pressure a regulatory cost creates",
+    "lambda_plat": "the pressure a platform creates",
+    "ratio": "the ratio of the two pressures",
+    "undiscounted_sum": "the undiscounted total",
+    "discounted_min": "the smallest discounted total",
+    "worst_sequence": "the worst order of states",
+    "worst_d_slot": "the least favourable slot",
+    "minimizing_states": "the states that make the total smallest",
+    "orderings_enumerated": "the number of orders checked",
+}
+
+_JARGON_PATTERN = re.compile(
+    r"\btw\d+(?:_\d+)?\b|\b(?:m_out|m_stab|worst_d_slot|worst_sequence|minimizing_states"
+    r"|orderings_enumerated|pareto_gap_all_R|all_a_is_ne|all_a_is_equilibrium|tau_risk_dominant"
+    r"|k_star|eta_critical|lambda_effective|lambda_reg|lambda_plat)\b", re.IGNORECASE)
+
+
+def _plain_result_label(key: str) -> str:
+    label = _PLAIN_RESULT_LABELS.get(key)
+    if label:
+        return label
+    return key.replace("_", " ").strip()
+
+
+def _plain_scenario_name(title: str) -> str:
+    name = re.sub(r"^\s*Tw\.?\s*[0-9]+(?:\.[0-9]+)?\s*[-–]\s*", "", title or "")
+    return name.strip() or title or ""
+
+
 def calculations_digest(scenarios: list[Mapping[str, Any]]) -> list[dict]:
     digest = []
     for item in scenarios:
         checks = item.get("checks", [])
-        results = {key: value for key, value in item.get("results", {}).items()
+        results = {_plain_result_label(key): value
+                   for key, value in item.get("results", {}).items()
                    if not _contains_long_list(value)}
-        digest.append({"scenario": item.get("scenario", ""), "title": item.get("title", ""),
+        digest.append({"scenario": _plain_scenario_name(item.get("title", "")),
                        "status": item.get("status", ""),
                        "params": dict(item.get("params", {})),
                        "checks": f"{sum(1 for check in checks if check.get('ok'))}"
@@ -767,9 +826,13 @@ def _practical_conclusions(summary: str, vocabulary: Mapping[str, Any],
     if client is None:
         import openai
         client = openai.OpenAI(base_url=config.base_url, api_key=config.api_key or "none")
-    system = ("You are a game-theory analyst. Using ONLY the numbers in this evidence, write 4 "
-              "to 7 short practical conclusions for the user, each one sentence, each citing at "
-              "least one exact number from the evidence. Reply with ONLY a JSON object "
+    system = ("You are a game-theory analyst advising a decision-maker. Using ONLY the numbers "
+              "in this evidence, write 4 to 7 short practical conclusions, each one sentence, "
+              "each citing at least one exact number from the evidence. Refer to each scenario "
+              "by its plain name from the evidence, never by an id. Never use internal field "
+              "names: describe what a number measures instead. Frame every conclusion in the "
+              "user's own terms, using their players, decision and forms of cooperation and "
+              "defection. Reply with ONLY a JSON object "
               '{"practical_conclusions": ["..."]}')
     user = json.dumps({"situation_summary": summary, "vocabulary": dict(vocabulary),
                        "calculations": digest})
@@ -782,7 +845,8 @@ def _practical_conclusions(summary: str, vocabulary: Mapping[str, Any],
         bullets = parsed.get("practical_conclusions")
         if not isinstance(bullets, list):
             return []
-        return [str(bullet) for bullet in bullets if str(bullet).strip()]
+        return [str(bullet).strip() for bullet in bullets
+                if str(bullet).strip() and not _JARGON_PATTERN.search(str(bullet))]
     except Exception:
         return []
 

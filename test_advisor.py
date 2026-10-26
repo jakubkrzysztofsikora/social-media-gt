@@ -2,6 +2,7 @@
 import asyncio
 import inspect
 import json
+import re
 from fractions import Fraction as F
 from types import SimpleNamespace
 
@@ -767,13 +768,31 @@ def test_practical_conclusions_rendered():
     assert digest["params"] == entry["params"]
     assert digest["checks"] == (f"{sum(1 for check in entry['checks'] if check['ok'])}"
                                 f"/{len(entry['checks'])}")
-    assert "t_first_best" in digest["results"]
-    assert "curve_t" not in digest["results"]
-    assert "curve_V" not in digest["results"]
+    assert "the best outcome for a single actor" in digest["results"]
+    assert "curve t" not in digest["results"]
+    assert "curve v" not in digest["results"]
 
     synthetic = advisor.run_one_scenario("tw1", {})
     synthetic["results"]["long_series"] = list(range(13))
-    assert "long_series" not in advisor.calculations_digest([synthetic])[0]["results"]
+    assert "long series" not in advisor.calculations_digest([synthetic])[0]["results"]
+
+
+def test_digest_uses_plain_scenario_and_result_names():
+    entry = advisor.run_one_scenario("tw5", {})
+    digest = advisor.calculations_digest([entry])[0]
+    assert not re.search(r"tw\d", digest["scenario"], re.IGNORECASE)
+    assert "Tw." not in digest["scenario"]
+    for key in digest["results"]:
+        assert not re.search(r"\btw\d", key, re.IGNORECASE)
+        assert key == key.replace("_", " ") or key in advisor._PLAIN_RESULT_LABELS.values()
+
+
+def test_practical_conclusions_drop_jargon_bullets():
+    bullets = ["In scenario tw5 the threshold is 4 for m_out.",
+               "Restricting together costs 1/2 while deviating pays 0."]
+    client = _StubClient([json.dumps(_default_payload()), json.dumps({"practical_conclusions": bullets})])
+    report = advisor.analyze_situation([{"role": "user", "content": "defaults"}], client=client)
+    assert report["practical_conclusions"] == ["Restricting together costs 1/2 while deviating pays 0."]
 
 
 def test_practical_conclusions_failure_tolerated():
