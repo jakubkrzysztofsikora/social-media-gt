@@ -2,7 +2,10 @@
 import asyncio
 import inspect
 import json
+import os
 import re
+import subprocess
+import sys
 from fractions import Fraction as F
 from types import SimpleNamespace
 
@@ -93,7 +96,8 @@ EXPECTED_STRATEGY_LAYOUTS = {
         ("Cooperate jointly (Pareto better)", "trap class and welfare gap at the midpoint",
          {"Pareto trap class non-empty": "pareto_trap_class_nonempty",
           "welfare gap at the midpoint": "pareto_gap_at_midpoint"}),
-        ("All-using (risk-dominant)", "cutoff above which all-using is risk-dominant",
+        ("All-using (risk-dominant)",
+         "cutoff below which all-using is risk-dominant; equality is the tie boundary",
          {"risk-dominant cutoff tau^RD": "tau_risk_dominant"}),
     ],
     "tw5": [
@@ -107,7 +111,7 @@ EXPECTED_STRATEGY_LAYOUTS = {
     "tw6": [
         ("No pact", "adoption returns to full after the pact ends",
          {"rounds to full adoption after release": "release_steps"}),
-        ("Pact of gamma aware members", "adoption level held, contraction, trajectory, exit multiplier",
+        ("Pact covering gamma of the total cohort", "adoption level held, contraction, trajectory, exit multiplier",
          {"adoption level K": "K", "contraction a": "a", "trajectory": "trajectory",
           "exit multiplier": "exit_multiplier"}),
     ],
@@ -311,7 +315,7 @@ def test_tw6_degenerate_fixed_point_is_reported_as_error():
     params = {"eps": F(1, 1000), "gamma": F(1, 1000), "p_slope": F(45000, 499)}
     result = advisor.run_one_scenario("tw6", params)
     assert result["status"] == "error"
-    assert "no unique finite fixed point" in result["error"]
+    assert "singular tw6 coalition operator" in result["error"]
     assert result["results"] == {}
 
 def test_analyze_situation_totals_are_green():
@@ -698,6 +702,13 @@ def test_prompt_allows_clarifying_gate():
     assert "never ask questions about unstated numbers" in prompt
 
 
+def test_prompt_converts_tw6_gamma_to_total_cohort_share():
+    prompt = advisor.build_system_prompt().lower()
+    assert "gamma is a share of the total cohort" in prompt
+    assert "multiply it by (1 - eps)" in prompt
+    assert "25% of the remaining 90% is gamma = 0.225" in prompt
+
+
 def test_gated_response_skips_scenarios(monkeypatch):
     payload = {"need_more_information": True,
                "questions": ["Who are the players?", "What does each player decide?"],
@@ -822,3 +833,122 @@ def test_calculations_summary_table():
     assert "## Calculations summary" in markdown
     passed = sum(1 for check in evidence["checks"] if check["ok"])
     assert f"| tw1 | ok | {passed}/{len(evidence['checks'])} |" in markdown
+
+
+def test_tw6_gamma_report_uses_total_cohort_denominator():
+    item = advisor.run_one_scenario("tw6", {})
+    conclusion = " ".join(item["conclusion"])
+    meaning = advisor.CATALOG["tw6"]["params"]["gamma"]["meaning"].lower()
+    assert "22.5% of the total cohort" in conclusion.lower()
+    assert "25% of conscientious households" in conclusion.lower()
+    assert "total cohort" in meaning
+
+
+def test_infer_parameters_retries_parseable_but_invalid_schema():
+    valid = json.dumps(_default_payload())
+    client = _StubClient(["{}", valid])
+    parsed = advisor.infer_parameters([{"role": "user", "content": "a clear game"}], client)
+    assert set(parsed["scenarios"]) == set(SCENARIO_IDS)
+    assert len(client.chat.completions.calls) == 2
+
+
+def test_tw6_singular_coalition_slope_is_rejected_before_calculation():
+    item = advisor.run_one_scenario(
+        "tw6", {"eps": "1/10", "gamma": "2/5", "p_slope": 2, "f_lo": 0, "f_hi": 1})
+    assert item["status"] == "error"
+    assert not item["results"]
+    assert "singular" in item["error"].lower()
+
+
+def test_tw3_2_cutoff_direction_matches_risk_dominance():
+    item = advisor.run_one_scenario("tw3_2", {"f1": 1, "E1": 3})
+    report = {"situation_summary": "A game.", "scenarios": [item],
+              "totals": {"scenarios": 1, "ok": 1, "errors": 0,
+                         "checks_total": len(item["checks"]), "checks_failed": 0}}
+    markdown = advisor.render_report(report)
+    assert "cutoff below which all-using is risk-dominant" in markdown
+
+
+def test_report_labels_default_parameters_as_conditional():
+    report = advisor.analyze_situation(
+        [{"role": "user", "content": "A clear game with no stated measurements."}],
+        client=_StubClient([json.dumps(_default_payload()),
+                            json.dumps({"practical_conclusions": ["Under the defaults, value is 1/2."]})]))
+    assert "## Parameter assumptions" in report["markdown"]
+    assert "conditional on the displayed values" in report["markdown"].lower()
+    assert "not estimates for this situation" in report["markdown"].lower()
+
+
+def test_zero_denominator_parameter_falls_back_to_default():
+    item = advisor.run_one_scenario("tw1", {"tau": "1/0", "f1": "1/4"})
+    assert item["status"] == "ok"
+    assert item["params"]["tau"] == "1/2"
+    assert item["params"]["f1"] == "1/4"
+    assert any("tau: inferred value unusable" in note for note in item["param_notes"])
+
+
+def test_practical_prompt_marks_defaults_as_assumptions():
+    client = _StubClient([json.dumps(_default_payload()),
+                          json.dumps({"practical_conclusions": []})])
+    advisor.analyze_situation([{"role": "user", "content": "a qualitative game"}], client)
+    prompt = client.chat.completions.calls[1]["messages"][0]["content"].lower()
+    assert "paper defaults" in prompt
+    assert "conditionally" in prompt
+
+
+def test_math_text_does_not_replace_tokens_inside_words():
+    assert advisor._math_text("steps metadata") == "steps metadata"
+
+
+def test_math_text_preserves_existing_math_spans():
+    text = r"The threshold is $\\tau$ and $\\epsilon$."
+    assert advisor._math_text(text) == text
+
+
+def test_infer_parameters_retries_non_boolean_clarification_flag():
+    invalid = _default_payload()
+    invalid["need_more_information"] = "false"
+    invalid["questions"] = 7
+    client = _StubClient([json.dumps(invalid), json.dumps(_default_payload())])
+    parsed = advisor.infer_parameters([{"role": "user", "content": "a clear game"}], client)
+    assert "need_more_information" not in parsed
+    assert len(client.chat.completions.calls) == 2
+
+
+def test_math_text_formats_tokens_between_escaped_currency_amounts():
+    text = r"The price is \$5, tau is 1/2, and the fee is \$10."
+    rendered = advisor._math_text(text)
+    assert r"\$5" in rendered
+    assert r"$\tau$" in rendered
+    assert r"\$10" in rendered
+
+
+def test_unmatched_currency_dollar_does_not_hide_text_substitution():
+    assert advisor._math_text("$5 and tau is 1/2") == "$5 and $\\tau$ is 1/2"
+
+
+def test_math_text_preserves_escaped_currency_inside_inline_and_display_math():
+    formulas = [r"$\text{cost: \$5} + \tau$",
+                r"$$\text{cost: \$5} + \tau$$"]
+    for formula in formulas:
+        assert advisor._math_text(formula) == formula
+
+
+def test_practical_prompt_keeps_user_language_and_field_description_guidance():
+    client = _StubClient([json.dumps(_default_payload()),
+                          json.dumps({"practical_conclusions": []})])
+    advisor.analyze_situation([{"role": "user", "content": "a game"}], client)
+    prompt = client.chat.completions.calls[1]["messages"][0]["content"].lower()
+    assert "describe what a number measures instead" in prompt
+    assert "frame every conclusion in the user's own terms" in prompt
+
+
+def test_math_text_handles_unmatched_dollar_with_many_backslashes():
+    text = "$" + "\\" * 40 + "x"
+    code = f"import advisor; text={text!r}; print(advisor._math_text(text) == text)"
+    try:
+        result = subprocess.run([sys.executable, "-c", code], cwd=os.path.dirname(__file__),
+                                capture_output=True, text=True, timeout=3, check=True)
+    except subprocess.TimeoutExpired:
+        result = None
+    assert result is not None and result.stdout.strip() == "True"

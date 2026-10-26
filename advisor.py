@@ -101,7 +101,8 @@ PARAM_TEXT: dict[str, dict[str, tuple[str, str]]] = {
         "d": ("families unaware of the pact", "integer 0 <= d <= n - 1"),
     },
     "tw6": {
-        "gamma": ("share of aware parents signing the pact", "1/1000 <= gamma < 1 - eps; "
+        "gamma": ("share of the total cohort signing the pact; with eps=0.10, gamma=0.225 is 25% of "
+                  "the remaining conscientious households", "1/1000 <= gamma < 1 - eps; "
                   "(1 - eps - gamma) * p_slope != f_hi - f_lo"),
         "eps": ("baseline share of families using social media before peer pressure acts (floor of "
                 "the adoption map)", "1/1000 <= eps <= 998/1000"),
@@ -234,7 +235,7 @@ STRATEGY_VIEWS: dict[str, list[dict]] = {
          "values": {"Pareto trap class non-empty": "pareto_trap_class_nonempty",
                     "welfare gap at the midpoint": "pareto_gap_at_midpoint"}},
         {"strategy": "All-using (risk-dominant)",
-         "outcome": "cutoff above which all-using is risk-dominant",
+         "outcome": "cutoff below which all-using is risk-dominant; equality is the tie boundary",
          "values": {"risk-dominant cutoff tau^RD": "tau_risk_dominant"}},
     ],
     "tw5": [
@@ -251,7 +252,7 @@ STRATEGY_VIEWS: dict[str, list[dict]] = {
         {"strategy": "No pact",
          "outcome": "adoption returns to full after the pact ends",
          "values": {"rounds to full adoption after release": "release_steps"}},
-        {"strategy": "Pact of gamma aware members",
+        {"strategy": "Pact covering gamma of the total cohort",
          "outcome": "adoption level held, contraction, trajectory, exit multiplier",
          "values": {"adoption level K": "K", "contraction a": "a",
                     "trajectory": "trajectory", "exit multiplier": "exit_multiplier"}},
@@ -365,7 +366,7 @@ def normalize_params(scenario_id: str, raw: Mapping[str, object]) -> tuple[dict[
             continue
         try:
             values[key] = to_fraction(raw_value)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, ZeroDivisionError):
             notes.append(f"{key}: inferred value unusable, paper default used")
 
     if scenario_id in ("tw1", "tw3_2"):
@@ -420,6 +421,10 @@ def normalize_params(scenario_id: str, raw: Mapping[str, object]) -> tuple[dict[
             values["gamma"] = room
             notes.append(f"gamma: adjusted from {gt.show(old)} to {gt.show(room)} "
                          "(the pact cannot cover the whole cohort)")
+        slope_term = (1 - values["eps"] - values["gamma"]) * values["p_slope"]
+        span = values["f_hi"] - values["f_lo"]
+        if slope_term == span:
+            raise ValueError("singular tw6 coalition operator parameter combination")
 
     if scenario_id == "tw7":
         _clamp(values, notes, "lam", Fraction(1, 1000), None, "pressure slope must stay positive")
@@ -511,7 +516,11 @@ def build_system_prompt() -> str:
         "How to map the conversation onto parameters:",
         "- A cohort size stated in the conversation becomes n in tw3 and n in tw5.",
         "- A stated number of families unaware of a pact becomes d in tw5.",
-        "- A stated share of aware parents signing a pact becomes gamma in tw6.",
+        "- gamma is a share of the total cohort. If the conversation states a share of the "
+        "remaining conscientious households, multiply it by (1 - eps); with eps = 0.10, "
+        "25% of the remaining 90% is gamma = 0.225.",
+        "- Do not copy a percentage across different denominators; convert it to the "
+        "parameter's stated denominator.",
         "- A stated share of the group covered by a rule becomes eta in tw7.",
         "- A stated evasion rate becomes eta in tw7_2.",
         "- A stated cost, benefit or harm relative to the full private benefit becomes tau, f1 or "
@@ -519,8 +528,8 @@ def build_system_prompt() -> str:
         "- A stated screen-time limit becomes T in tw1_1.",
         "- Prefer a number stated in the conversation over the paper default.",
         "- Every number stated in the conversation that matches a parameter's meaning MUST be "
-        "copied into that parameter; never return the paper default for a parameter the "
-        "conversation quantifies.",
+        "mapped using its units and denominator; never return the paper default for a parameter "
+        "the conversation quantifies.",
         "- If a stated number matches no parameter's meaning, leave it unmapped instead of "
         "forcing it into an unrelated parameter.",
         "- situation_summary and vocabulary MUST describe the user's own situation: their "
@@ -601,6 +610,38 @@ def _parse_json_object(raw: str) -> dict:
     return parsed
 
 
+def _validate_inference_payload(payload: Mapping[str, Any]) -> None:
+    needs_more = payload.get("need_more_information", False)
+    if not isinstance(needs_more, bool):
+        raise ValueError("need_more_information must be a boolean")
+    if needs_more:
+        questions = payload.get("questions")
+        if (not isinstance(questions, list) or not 1 <= len(questions) <= 3
+                or any(not isinstance(question, str) or not question.strip()
+                       for question in questions)):
+            raise ValueError("clarification response needs 1 to 3 non-empty string questions")
+        return
+
+    scenarios = payload.get("scenarios")
+    if not isinstance(scenarios, Mapping):
+        raise ValueError("analysis response needs a scenarios object")
+    missing = set(CATALOG) - set(scenarios)
+    if missing:
+        raise ValueError(f"analysis response is missing scenarios: {', '.join(sorted(missing))}")
+    if not isinstance(payload.get("situation_summary"), str):
+        raise ValueError("analysis response needs a string situation_summary")
+    vocabulary = payload.get("vocabulary", {})
+    if (not isinstance(vocabulary, Mapping)
+            or any(not isinstance(value, str) for value in vocabulary.values())):
+        raise ValueError("analysis response vocabulary must map labels to strings")
+    for scenario_id, entry in scenarios.items():
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"scenario {scenario_id} must be an object")
+        params = entry.get("params", entry)
+        if not isinstance(params, Mapping):
+            raise ValueError(f"scenario {scenario_id} parameters must be an object")
+
+
 def infer_parameters(messages: list[dict], client=None, config: Config | None = None) -> dict:
     """Ask the LLM for a parameter set per scenario."""
     config = config or load_config()
@@ -624,14 +665,15 @@ def infer_parameters(messages: list[dict], client=None, config: Config | None = 
         raw = completion.choices[0].message.content or ""
         try:
             parsed = _parse_json_object(raw)
+            _validate_inference_payload(parsed)
         except (ValueError, json.JSONDecodeError) as exc:
             last_error = str(exc)
             if attempt == 1:
                 history = history + [{"role": "assistant", "content": raw},
-                                     {"role": "user", "content": f"Invalid JSON: {last_error}. "
+                                     {"role": "user", "content": f"Invalid response: {last_error}. "
                                       "Reply with ONLY the JSON object described above."}]
                 continue
-            raise InferenceError(f"LLM did not return parseable JSON: {raw[:400]}") from exc
+            raise InferenceError(f"LLM returned invalid response: {last_error}; {raw[:400]}") from exc
         parsed["raw"] = raw
         parsed["model"] = config.model
         return parsed
@@ -846,7 +888,9 @@ def _practical_conclusions(summary: str, vocabulary: Mapping[str, Any],
               "by its plain name from the evidence, never by an id. Never use internal field "
               "names: describe what a number measures instead. Frame every conclusion in the "
               "user's own terms, using their players, decision and forms of cooperation and "
-              "defection. Reply with ONLY a JSON object "
+              "defection. Treat paper defaults as assumptions, not measured facts; frame "
+              "conclusions conditionally on the displayed parameter values. Reply with ONLY "
+              "a JSON object "
               '{"practical_conclusions": ["..."]}')
     user = json.dumps({"situation_summary": summary, "vocabulary": dict(vocabulary),
                        "calculations": digest})
@@ -871,7 +915,7 @@ def analyze_situation(messages: list[dict], client=None, config: Config | None =
     inference = infer_parameters(messages, client=client, config=config)
 
     questions = inference.get("questions")
-    if inference.get("need_more_information") and questions:
+    if inference.get("need_more_information") is True and questions:
         questions = [str(question) for question in questions]
         lines = ["## Clarifying questions", ""]
         lines.extend(f"{index}. {_math_text(question)}"
@@ -989,13 +1033,26 @@ _MATH_TEXT = [
     (r"eta", r"$\eta$"), (r"delta", r"$\delta$"), (r"lambda", r"$\lambda$"),
     (r"lam", r"$\lambda$"), (r"tau", r"$\tau$"), (r"Phi", r"$\Phi$"),
 ]
-_MATH_TEXT_PATTERN = re.compile("|".join(f"(?P<m{i}>{pattern})" for i, (pattern, _) in enumerate(_MATH_TEXT)))
+_MATH_TEXT_PATTERN = re.compile("|".join(
+    f"(?<![\\w])(?P<m{i}>{pattern})(?![\\w])"
+    for i, (pattern, _) in enumerate(_MATH_TEXT)))
+_MATH_SPAN_PATTERN = re.compile(r"(?<!\\)([$]{1,2})(?:\\.|[^\\$])*?(?<!\\)\1")
 _MATH_TEXT_REPLACEMENTS = {f"m{i}": replacement for i, (_, replacement) in enumerate(_MATH_TEXT)}
 
 
 def _math_text(value: Any) -> str:
     text = str(value)
-    return _MATH_TEXT_PATTERN.sub(lambda match: _MATH_TEXT_REPLACEMENTS[match.lastgroup], text)
+    output = []
+    cursor = 0
+    for span in _MATH_SPAN_PATTERN.finditer(text):
+        outside = text[cursor:span.start()]
+        output.append(_MATH_TEXT_PATTERN.sub(
+            lambda match: _MATH_TEXT_REPLACEMENTS[match.lastgroup], outside))
+        output.append(span.group())
+        cursor = span.end()
+    output.append(_MATH_TEXT_PATTERN.sub(
+        lambda match: _MATH_TEXT_REPLACEMENTS[match.lastgroup], text[cursor:]))
+    return "".join(output)
 
 
 def _math_value(value: Any) -> str:
@@ -1058,6 +1115,11 @@ def render_report(report: Mapping[str, Any]) -> str:
     summary = (report.get("situation_summary") or "").strip()
     lines.append(_math_text(summary) if summary else "_no situation summary_")
     lines.append("")
+
+    lines.extend(["## Parameter assumptions", "",
+                  "Parameters not established by the conversation may use paper defaults. "
+                  "Results are conditional on the displayed values; paper defaults are "
+                  "illustrative, not estimates for this situation.", ""])
 
     vocabulary = report.get("vocabulary")
     if not isinstance(vocabulary, Mapping):

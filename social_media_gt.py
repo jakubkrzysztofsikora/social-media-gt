@@ -346,8 +346,9 @@ def tw6_coalition_continuum(gamma=F(9, 40), eps=EPS, p_slope=F(100), f_lo=F(5), 
                             release_steps == 15, 15, release_steps))
     results = {"K": K, "a": a, "trajectory": trajectory, "exit_multiplier": exit_multiplier,
                "release_steps": release_steps}
-    conclusion = ["A cross-sectional pact of 22.5% of aware parents pulls the cohort down to 25% adoption, "
-                  "but the effect evaporates once the commitment ends."]
+    conclusion = ["A cross-sectional pact covering 22.5% of the total cohort (25% of conscientious "
+                  "households at eps = 10%) pulls adoption down to 25%, but the effect evaporates "
+                  "once the commitment ends."]
     return result("tw6", "Tw. 6 - coalitions in the continuum",
                   {"gamma": gamma, "eps": eps, "p_slope": p_slope, "f_lo": f_lo, "f_hi": f_hi},
                   results, checks, conclusion)
