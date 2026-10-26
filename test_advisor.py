@@ -266,7 +266,8 @@ def test_run_scenarios_matches_toolkit_results_and_checks():
     for actual, expected in zip(evidence, toolkit["results"]):
         assert actual["results"] == _expected_display(expected["results"]), actual["scenario"]
         assert actual["checks"] == expected["checks"], actual["scenario"]
-        assert actual["conclusion"] == expected["conclusion"], actual["scenario"]
+        assert actual["conclusion"] == [advisor._neutral_conclusion(s)
+                                        for s in expected["conclusion"]], actual["scenario"]
         assert actual["strategies"], actual["scenario"]
 
 
@@ -628,3 +629,19 @@ def test_prompt_demands_stated_numbers():
     assert "vocabulary" in contract
     for key in ("players", "decision", "cooperation", "defection"):
         assert f'"{key}"' in contract
+
+
+def test_conclusions_are_domain_neutral_for_every_scenario():
+    banned = ("parent", "social media", "screen", "famil")
+    for scenario_id in SCENARIO_IDS:
+        result = advisor.run_one_scenario(scenario_id, {})
+        assert result["status"] == "ok", scenario_id
+        assert result["conclusion"], scenario_id
+        report = {"situation_summary": "s", "scenarios": [result],
+                  "totals": {"scenarios": 1, "ok": 1, "errors": 0,
+                             "checks_total": len(result["checks"]), "checks_failed": 0}}
+        markdown = advisor.render_report(report)
+        rendered = [line[3:] for line in markdown.splitlines() if line.startswith("-> ")]
+        assert len(rendered) == len(result["conclusion"]), scenario_id
+        for sentence in rendered:
+            assert not any(word in sentence.lower() for word in banned), (scenario_id, sentence)

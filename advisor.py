@@ -698,7 +698,8 @@ def run_one_scenario(scenario_id: str, raw: Mapping[str, object] | None = None) 
 
     entry["results"] = _render(result["results"])
     entry["checks"] = result["checks"]
-    entry["conclusion"] = result["conclusion"]
+    entry["conclusion"] = [_neutral_conclusion(str(sentence))
+                           for sentence in result["conclusion"]]
     if any(not check["ok"] for check in entry["checks"]):
         entry["status"] = "error"
         entry["error"] = "one or more verification checks failed"
@@ -861,6 +862,26 @@ def _result_label(key: str) -> str:
 
 def _parameter_label(key: str) -> str:
     return PARAMETER_MATH_LABELS.get(key, _math_text(key))
+
+
+_NEUTRAL_CONCLUSIONS = [
+    ("A parent sets a stricter screen-time limit", "A member sets a stricter decision cap"),
+    ("hurts the child more than screen time does", "hurts the member more than the decision does"),
+    ("restricting together", "cooperating together"),
+    ("to the platform", "to product defaults"),
+    ("families", "members"),
+    ("family", "member"),
+    ("parents", "members"),
+    ("parent", "member"),
+    ("screen-time", "decision"),
+    ("screen time", "decision"),
+]
+
+
+def _neutral_conclusion(sentence: str) -> str:
+    for old, new in _NEUTRAL_CONCLUSIONS:
+        sentence = sentence.replace(old, new)
+    return sentence
 
 
 def render_report(report: Mapping[str, Any]) -> str:
