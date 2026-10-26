@@ -787,6 +787,15 @@ def test_digest_uses_plain_scenario_and_result_names():
         assert key == key.replace("_", " ") or key in advisor._PLAIN_RESULT_LABELS.values()
 
 
+def test_digest_scenario_names_avoid_paper_framing():
+    entries = [advisor.run_one_scenario(scenario_id, {}) for scenario_id in SCENARIO_IDS]
+    names = [item["scenario"] for item in advisor.calculations_digest(entries)]
+    banned = ("screen", "social media", "family", "parent", "fixed point")
+    assert len(names) == len(SCENARIO_IDS)
+    for name in names:
+        assert not any(word in name.lower() for word in banned), name
+
+
 def test_practical_conclusions_drop_jargon_bullets():
     bullets = ["In scenario tw5 the threshold is 4 for m_out.",
                "Restricting together costs 1/2 while deviating pays 0."]

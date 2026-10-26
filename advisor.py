@@ -798,9 +798,22 @@ def _plain_result_label(key: str) -> str:
     return key.replace("_", " ").strip()
 
 
-def _plain_scenario_name(title: str) -> str:
-    name = re.sub(r"^\s*Tw\.?\s*[0-9]+(?:\.[0-9]+)?\s*[-–]\s*", "", title or "")
-    return name.strip() or title or ""
+_PLAIN_SCENARIO_NAMES = {
+    "tw1": "shared-cost dilemma",
+    "tw1_1": "individual choice with peer effects",
+    "tw2": "self-reinforcing participation",
+    "tw3": "stability under individual changes",
+    "tw3_2": "uncertain incentives and participation",
+    "tw5": "outsider incentives and agreement durability",
+    "tw6": "coalition formation and persistence",
+    "tw7": "group-wide pressure reduction",
+    "tw7_2": "enforcement and evasion",
+    "tw8": "sequential withdrawal without authority",
+}
+
+
+def _plain_scenario_name(scenario_id: str, title: str) -> str:
+    return _PLAIN_SCENARIO_NAMES.get(scenario_id, title)
 
 
 def calculations_digest(scenarios: list[Mapping[str, Any]]) -> list[dict]:
@@ -810,7 +823,8 @@ def calculations_digest(scenarios: list[Mapping[str, Any]]) -> list[dict]:
         results = {_plain_result_label(key): value
                    for key, value in item.get("results", {}).items()
                    if not _contains_long_list(value)}
-        digest.append({"scenario": _plain_scenario_name(item.get("title", "")),
+        digest.append({"scenario": _plain_scenario_name(item.get("scenario", ""),
+                                                        item.get("title", "")),
                        "status": item.get("status", ""),
                        "params": dict(item.get("params", {})),
                        "checks": f"{sum(1 for check in checks if check.get('ok'))}"
