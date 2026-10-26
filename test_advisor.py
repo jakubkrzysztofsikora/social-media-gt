@@ -440,6 +440,14 @@ def test_mcp_success_payloads_include_status(monkeypatch):
     parsed = mcp_server.infer_parameters([])
     assert parsed["status"] == "ok"
 
+    monkeypatch.setattr(advisor, "infer_parameters", lambda messages: {
+        "need_more_information": True, "questions": ["Who are the players?"],
+        "situation_summary": "", "scenarios": {}, "model": "m", "raw": "{}"})
+    gated = mcp_server.infer_parameters([])
+    assert gated["status"] == "ok"
+    assert gated["need_more_information"] is True
+    assert gated["questions"] == ["Who are the players?"]
+
     monkeypatch.setattr(advisor, "analyze_situation", lambda messages: {
         "situation_summary": "s", "model": "m", "inference_raw": "{}",
         "scenarios": [], "totals": {"scenarios": 0}, "markdown": "# s"})
@@ -681,3 +689,108 @@ def test_mapping_block_ignores_placeholder_vocabulary():
     assert "Players:" not in markdown
     assert "Cooperating:" not in markdown
     assert "Defecting:" not in markdown
+
+
+def test_prompt_allows_clarifying_gate():
+    prompt = advisor.build_system_prompt()
+    assert "need_more_information" in prompt
+    assert "never ask questions about unstated numbers" in prompt
+
+
+def test_gated_response_skips_scenarios(monkeypatch):
+    payload = {"need_more_information": True,
+               "questions": ["Who are the players?", "What does each player decide?"],
+               "situation_summary": "Too vague to map."}
+    client = _StubClient([json.dumps(payload)])
+
+    def explode(params):
+        raise AssertionError("run_scenarios must not run for a gated response")
+
+    monkeypatch.setattr(advisor, "run_scenarios", explode)
+    report = advisor.analyze_situation([{"role": "user", "content": "something vague"}],
+                                       client=client)
+    assert report["need_more_information"] is True
+    assert report["questions"] == payload["questions"]
+    assert report["situation_summary"] == "Too vague to map."
+    assert "## Clarifying questions" in report["markdown"]
+    assert "1. Who are the players?" in report["markdown"]
+    assert "2. What does each player decide?" in report["markdown"]
+
+
+def test_gated_response_webapp_renders_questions(monkeypatch):
+    import webapp
+
+    gated = {"need_more_information": True, "questions": ["Who are the players?"],
+             "situation_summary": "", "vocabulary": {},
+             "markdown": "## Clarifying questions\n\n1. Who are the players?"}
+    monkeypatch.setattr(advisor, "analyze_situation", lambda messages: dict(gated))
+    chat, state, markdown, raw, cleared = webapp.respond([], [], "something vague")
+    assistant = [m["content"] for m in chat if m["role"] == "assistant"]
+    assert any("Before I run the numbers:" in content for content in assistant)
+    assert any("1. Who are the players?" in content for content in assistant)
+    assert "Who are the players?" in markdown
+    assert raw["need_more_information"] is True
+    assert "markdown" not in raw
+    assert len(state) == 2
+    assert cleared == ""
+
+
+class _SecondCallRaises:
+    def __init__(self, first_payload):
+        self.first_payload = first_payload
+        self.calls = 0
+
+    def create(self, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            message = SimpleNamespace(content=self.first_payload)
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+        raise RuntimeError("LLM exploded")
+
+
+def test_practical_conclusions_rendered():
+    bullets = ["The pact holds only 4 of the 9 members.",
+               "The limit reaches 1/2 of full adoption."]
+    analysis = _default_payload()
+    analysis["situation_summary"] = "Two factories share one river."
+    client = _StubClient([json.dumps(analysis), json.dumps({"practical_conclusions": bullets})])
+    report = advisor.analyze_situation([{"role": "user", "content": "factories"}], client=client)
+    assert report["practical_conclusions"] == bullets
+    markdown = report["markdown"]
+    assert "## Practical conclusions" in markdown
+    for bullet in bullets:
+        assert f"- {bullet}" in markdown
+
+    entry = advisor.run_one_scenario("tw1_1", {})
+    digest = advisor.calculations_digest([entry])[0]
+    assert digest["status"] == "ok"
+    assert digest["params"] == entry["params"]
+    assert digest["checks"] == (f"{sum(1 for check in entry['checks'] if check['ok'])}"
+                                f"/{len(entry['checks'])}")
+    assert "t_first_best" in digest["results"]
+    assert "curve_t" not in digest["results"]
+    assert "curve_V" not in digest["results"]
+
+    synthetic = advisor.run_one_scenario("tw1", {})
+    synthetic["results"]["long_series"] = list(range(13))
+    assert "long_series" not in advisor.calculations_digest([synthetic])[0]["results"]
+
+
+def test_practical_conclusions_failure_tolerated():
+    client = SimpleNamespace(chat=SimpleNamespace(
+        completions=_SecondCallRaises(json.dumps(_default_payload()))))
+    report = advisor.analyze_situation([{"role": "user", "content": "defaults"}], client=client)
+    assert report["totals"]["errors"] == 0
+    assert report["practical_conclusions"] == []
+    assert "## Practical conclusions" not in report["markdown"]
+
+
+def test_calculations_summary_table():
+    evidence = advisor.run_one_scenario("tw1", {})
+    report = {"situation_summary": "s", "scenarios": [evidence],
+              "totals": {"scenarios": 1, "ok": 1, "errors": 0,
+                         "checks_total": len(evidence["checks"]), "checks_failed": 0}}
+    markdown = advisor.render_report(report)
+    assert "## Calculations summary" in markdown
+    passed = sum(1 for check in evidence["checks"] if check["ok"])
+    assert f"| tw1 | ok | {passed}/{len(evidence['checks'])} |" in markdown

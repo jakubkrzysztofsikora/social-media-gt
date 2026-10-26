@@ -535,6 +535,11 @@ def build_system_prompt() -> str:
         "Use the paper default for any parameter the conversation gives no signal about.",
         "Values may be JSON numbers or fraction strings like '1/2'.",
         "Do not invent scenarios or extra keys.",
+        "If the conversation does not yet pin down who the players are, what each player "
+        'decides, and what cooperating vs defecting means, reply with ONLY '
+        '{"need_more_information": true, "questions": [up to 3 short questions]} instead of '
+        "the analysis. If the situation is clear, never ask questions about unstated numbers - "
+        "analyze with the paper defaults and the existing caveat covers them.",
     ]
     return "\n".join(lines)
 
@@ -732,10 +737,73 @@ def run_scenarios(params_by_scenario: Mapping[str, Mapping[str, object]]) -> lis
             for scenario_id in gt.SCENARIOS]
 
 
+def _contains_long_list(value: Any, limit: int = 8) -> bool:
+    if isinstance(value, list):
+        return len(value) > limit or any(_contains_long_list(item, limit) for item in value)
+    if isinstance(value, dict):
+        return any(_contains_long_list(item, limit) for item in value.values())
+    return False
+
+
+def calculations_digest(scenarios: list[Mapping[str, Any]]) -> list[dict]:
+    digest = []
+    for item in scenarios:
+        checks = item.get("checks", [])
+        results = {key: value for key, value in item.get("results", {}).items()
+                   if not _contains_long_list(value)}
+        digest.append({"scenario": item.get("scenario", ""), "title": item.get("title", ""),
+                       "status": item.get("status", ""),
+                       "params": dict(item.get("params", {})),
+                       "checks": f"{sum(1 for check in checks if check.get('ok'))}"
+                                 f"/{len(checks)}",
+                       "results": results})
+    return digest
+
+
+def _practical_conclusions(summary: str, vocabulary: Mapping[str, Any],
+                           digest: list[dict], client=None,
+                           config: Config | None = None) -> list[str]:
+    config = config or load_config()
+    if client is None:
+        import openai
+        client = openai.OpenAI(base_url=config.base_url, api_key=config.api_key or "none")
+    system = ("You are a game-theory analyst. Using ONLY the numbers in this evidence, write 4 "
+              "to 7 short practical conclusions for the user, each one sentence, each citing at "
+              "least one exact number from the evidence. Reply with ONLY a JSON object "
+              '{"practical_conclusions": ["..."]}')
+    user = json.dumps({"situation_summary": summary, "vocabulary": dict(vocabulary),
+                       "calculations": digest})
+    try:
+        completion = client.chat.completions.create(
+            model=config.model, temperature=0,
+            messages=[{"role": "system", "content": system},
+                      {"role": "user", "content": user}])
+        parsed = _parse_json_object(completion.choices[0].message.content or "")
+        bullets = parsed.get("practical_conclusions")
+        if not isinstance(bullets, list):
+            return []
+        return [str(bullet) for bullet in bullets if str(bullet).strip()]
+    except Exception:
+        return []
+
+
 def analyze_situation(messages: list[dict], client=None, config: Config | None = None) -> dict:
     """Infer parameters from the conversation, run all scenarios and assemble the report."""
     config = config or load_config()
     inference = infer_parameters(messages, client=client, config=config)
+
+    questions = inference.get("questions")
+    if inference.get("need_more_information") and questions:
+        questions = [str(question) for question in questions]
+        lines = ["## Clarifying questions", ""]
+        lines.extend(f"{index}. {_math_text(question)}"
+                     for index, question in enumerate(questions, 1))
+        return {"need_more_information": True,
+                "questions": questions,
+                "situation_summary": inference.get("situation_summary", "") or "",
+                "vocabulary": inference.get("vocabulary") or {},
+                "model": inference.get("model") or config.model,
+                "markdown": "\n".join(lines)}
 
     scenario_params: dict[str, dict] = {}
     for scenario_id, entry in (inference.get("scenarios") or {}).items():
@@ -763,6 +831,9 @@ def analyze_situation(messages: list[dict], client=None, config: Config | None =
               "inference_raw": inference.get("raw", "") or "",
               "scenarios": scenarios,
               "totals": totals}
+    report["practical_conclusions"] = _practical_conclusions(
+        report["situation_summary"], report["vocabulary"],
+        calculations_digest(scenarios), client=client, config=config)
     report["markdown"] = render_report(report)
     return report
 
@@ -922,6 +993,25 @@ def render_report(report: Mapping[str, Any]) -> str:
         lines.append("## Mapping")
         lines.append("")
         lines.extend(f"{label}: {_math_text(value)}" for label, value in mapping)
+        lines.append("")
+
+    lines.append("## Calculations summary")
+    lines.append("")
+    lines.append("| scenario | status | checks |")
+    lines.append("| --- | --- | --- |")
+    for item in report.get("scenarios", []):
+        checks = item.get("checks", [])
+        passed = sum(1 for check in checks if check.get("ok"))
+        lines.append(f"| {_math_text(item.get('scenario', ''))} | {item.get('status', '')} | "
+                     f"{passed}/{len(checks)} |")
+    lines.append("")
+
+    bullets = [str(bullet) for bullet in (report.get("practical_conclusions") or [])
+               if str(bullet).strip()]
+    if bullets:
+        lines.append("## Practical conclusions")
+        lines.append("")
+        lines.extend(f"- {_math_text(bullet)}" for bullet in bullets)
         lines.append("")
 
     for item in report.get("scenarios", []):

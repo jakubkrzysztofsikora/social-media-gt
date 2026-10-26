@@ -223,9 +223,15 @@ def respond(history, state, text):
         failure = f"**Analysis failed:** {exc}"
         messages.append({"role": "assistant", "content": f"Analysis failed: {exc}"})
         return messages, messages, failure, {}, ""
+    raw = {key: value for key, value in report.items() if key != "markdown"}
+    if report.get("need_more_information"):
+        questions = "\n".join(f"{index}. {question}" for index, question
+                              in enumerate(report.get("questions", []), 1))
+        messages.append({"role": "assistant",
+                         "content": f"Before I run the numbers:\n{questions}"})
+        return messages, messages, report["markdown"], raw, ""
     markdown = report["markdown"]
     messages.append({"role": "assistant", "content": "Analysis complete. Full evidence is below."})
-    raw = {key: value for key, value in report.items() if key != "markdown"}
     return messages, messages, markdown, raw, ""
 
 
