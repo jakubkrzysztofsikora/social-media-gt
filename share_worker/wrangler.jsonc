@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "share-jakub-team",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-05-01",
+  "routes": [
+    { "pattern": "share.jakub.team", "custom_domain": true }
+  ],
+  "kv_namespaces": [
+    { "binding": "SHARE", "id": "305099cb3cfc4bcc8617c833ad0870c5" }
+  ]
+}

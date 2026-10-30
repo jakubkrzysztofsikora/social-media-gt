@@ -1,0 +1,10 @@
+{
+  "name": "share-jakub-team",
+  "version": "1.0.0",
+  "private": true,
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260501.0",
+    "typescript": "^5.5.0",
+    "wrangler": "^4.94.0"
+  }
+}
