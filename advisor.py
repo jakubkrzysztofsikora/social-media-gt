@@ -113,10 +113,11 @@ PARAM_TEXT: dict[str, dict[str, tuple[str, str]]] = {
         "f_hi": ("upper peer-pressure threshold (percent) where adoption saturates", "f_hi > f_lo"),
     },
     "tw7": {
-        "lam": ("slope of peer pressure per unit adoption; the effective pressure is lam * (1 - eta)",
-                "lam > 0"),
-        "eta": ("share of the group covered by the rule; uncovered peers keep the pressure",
-                "0 <= eta < 1"),
+        "lam": ("fraction of baseline peer pressure removed; when eta = 0, pressure is "
+                "100 * (1 - lam) * k; effective reduction is lam * (1 - eta)",
+                "1/1000 <= lam <= 1"),
+        "eta": ("attenuation factor in the tw7 recurrence; it scales the specified reduction "
+                "by (1 - eta)", "0 <= eta < 1"),
         "eps": ("floor of the adoption map", "0 < eps < 1"),
         "step": ("exogenous adoption pressure added each round", "step > 0"),
     },
@@ -148,6 +149,12 @@ SCENARIO_NOTES: dict[str, list[str]] = {
     "tw3_2": [
         "Model fact: the risk-dominant cutoff is tau^RD = (f1 + E1)/2.",
         "Model fact: the Pareto trap class is non-empty iff E1 > f1.",
+    ],
+    "tw7": [
+        "Paper P6: lambda in [0, 1] is the fraction of baseline peer pressure removed; when "
+        "eta = 0, pressure is 100 * (1 - lambda) * k.",
+        "Toolkit extension: eta scales the reduction by (1 - eta), so the effective fraction "
+        "removed is lambda * (1 - eta); eta has no defined coverage or evasion mechanism.",
     ],
     "tw8": [
         "Fixed inside the scenario (not inferred): 10 players, 9 aware.",
@@ -258,12 +265,12 @@ STRATEGY_VIEWS: dict[str, list[dict]] = {
                     "trajectory": "trajectory", "exit multiplier": "exit_multiplier"}},
     ],
     "tw7": [
-        {"strategy": "Rule covers part of the group",
-         "outcome": "effective pressure and resulting adoption limit",
-         "values": {"effective pressure": "lambda_effective", "adoption limit": "limit"}},
-        {"strategy": "No rule (eta = 0)",
-         "outcome": "baseline: the same toolkit function called with eta = 0",
-         "values": {"effective pressure": "lambda_effective", "adoption limit": "limit"},
+        {"strategy": "Pressure reduction after eta attenuation",
+         "outcome": "effective fraction of baseline peer pressure removed and resulting adoption limit",
+         "values": {"effective fraction removed": "lambda_effective", "adoption limit": "limit"}},
+        {"strategy": "Unattenuated pressure reduction (eta = 0)",
+         "outcome": "baseline with the full specified lambda reduction; same toolkit function with eta = 0",
+         "values": {"effective fraction removed": "lambda_effective", "adoption limit": "limit"},
          "baseline": {"eta": 0}},
     ],
     "tw7_2": [
@@ -427,9 +434,10 @@ def normalize_params(scenario_id: str, raw: Mapping[str, object]) -> tuple[dict[
             raise ValueError("singular tw6 coalition operator parameter combination")
 
     if scenario_id == "tw7":
-        _clamp(values, notes, "lam", Fraction(1, 1000), None, "pressure slope must stay positive")
+        _clamp(values, notes, "lam", Fraction(1, 1000), Fraction(1),
+               "pressure-reduction fraction must stay in [1/1000, 1]")
         _clamp(values, notes, "eta", Fraction(0), Fraction(999, 1000),
-               "rule coverage must stay in [0, 1)")
+               "reduction attenuation must stay in [0, 1)")
         _clamp(values, notes, "eps", Fraction(1, 1000), Fraction(999, 1000),
                "adoption floor must stay inside (0, 1)")
         _clamp(values, notes, "step", Fraction(1, 1000), None, "exogenous pressure must stay positive")
@@ -521,8 +529,11 @@ def build_system_prompt() -> str:
         "25% of the remaining 90% is gamma = 0.225.",
         "- Do not copy a percentage across different denominators; convert it to the "
         "parameter's stated denominator.",
-        "- A stated share of the group covered by a rule becomes eta in tw7.",
-        "- A stated evasion rate becomes eta in tw7_2.",
+        "- A stated fraction of baseline peer pressure removed becomes lambda (lam) in tw7; "
+        "P(k) = 100 * (1 - lambda) * k when eta = 0. Do not treat lambda as a pressure slope.",
+        "- In tw7, eta attenuates the specified reduction by the factor (1 - eta). Do not map "
+        "group coverage or evasion to eta; map it only when the conversation states reduction "
+        "attenuation.",
         "- A stated cost, benefit or harm relative to the full private benefit becomes tau, f1 or "
         "E1 in tw1 and f1 or E1 in tw3_2.",
         "- A stated screen-time limit becomes T in tw1_1.",
@@ -544,11 +555,15 @@ def build_system_prompt() -> str:
         "Use the paper default for any parameter the conversation gives no signal about.",
         "Values may be JSON numbers or fraction strings like '1/2'.",
         "Do not invent scenarios or extra keys.",
-        "If the conversation does not yet pin down who the players are, what each player "
-        'decides, and what cooperating vs defecting means, reply with ONLY '
-        '{"need_more_information": true, "questions": [up to 3 short questions]} instead of '
-        "the analysis. If the situation is clear, never ask questions about unstated numbers - "
-        "analyze with the paper defaults and the existing caveat covers them.",
+        "If the conversation does not yet pin down who is involved, what each side can do, "
+        'and what each side wants, reply with ONLY {"need_more_information": true, '
+        '"questions": [up to 2 short questions]} instead of the analysis. '
+        "Write each question the way you would ask a friend who knows no game theory, and "
+        "never use the words payoff, utility, Nash, equilibrium, strategy, player, type, "
+        "threshold or coefficient in a question. Ask about the real situation instead: who "
+        "decides, what each side can do, and which result each side prefers. Ask at most once "
+        "in a conversation. If the situation is clear, never ask questions about unstated "
+        "numbers - analyze with the paper defaults and the existing caveat covers them.",
     ]
     return "\n".join(lines)
 
@@ -616,10 +631,10 @@ def _validate_inference_payload(payload: Mapping[str, Any]) -> None:
         raise ValueError("need_more_information must be a boolean")
     if needs_more:
         questions = payload.get("questions")
-        if (not isinstance(questions, list) or not 1 <= len(questions) <= 3
+        if (not isinstance(questions, list) or not 1 <= len(questions) <= 2
                 or any(not isinstance(question, str) or not question.strip()
                        for question in questions)):
-            raise ValueError("clarification response needs 1 to 3 non-empty string questions")
+            raise ValueError("clarification response needs 1 to 2 non-empty string questions")
         return
 
     scenarios = payload.get("scenarios")
@@ -748,8 +763,19 @@ def run_one_scenario(scenario_id: str, raw: Mapping[str, object] | None = None) 
 
     entry["results"] = _render(result["results"])
     entry["checks"] = result["checks"]
-    entry["conclusion"] = [_neutral_conclusion(str(sentence))
-                           for sentence in result["conclusion"]]
+    if scenario_id == "tw7":
+        entry["conclusion"] = [
+            "P6 lambda is the fraction of baseline peer pressure removed; when eta = 0, pressure "
+            "is 100 * (1 - lambda) * k.",
+            "In tw7, eta scales the specified reduction by (1 - eta), so the effective fraction "
+            "removed is lambda * (1 - eta); eta identifies neither group coverage nor evasion.",
+        ]
+        if all(check["ok"] for check in entry["checks"]):
+            entry["conclusion"].append(
+                f"The recurrence converges to adoption limit {entry['results']['limit']} for these parameters.")
+    else:
+        entry["conclusion"] = [_neutral_conclusion(str(sentence))
+                               for sentence in result["conclusion"]]
     deviating = sorted(name for name, value in normalized.items()
                        if name in CATALOG[scenario_id]["params"]
                        and value != to_fraction(CATALOG[scenario_id]["params"][name]["default"]))
@@ -814,8 +840,8 @@ _PLAIN_RESULT_LABELS = {
     "trajectory": "the path the level takes over time",
     "exit_multiplier": "how strongly the pact decays when it ends",
     "release_steps": "how many rounds until the level recovers",
-    "eta_critical": "the share of the group that makes the rule bite",
-    "lambda_effective": "the pressure the rule creates",
+    "eta_critical": "the attenuation threshold where the adoption limit reaches full adoption",
+    "lambda_effective": "the effective fraction of baseline peer pressure removed after eta attenuation",
     "lambda_reg": "the pressure a regulatory cost creates",
     "lambda_plat": "the pressure a platform creates",
     "ratio": "the ratio of the two pressures",
@@ -848,7 +874,7 @@ _PLAIN_SCENARIO_NAMES = {
     "tw3_2": "uncertain incentives and participation",
     "tw5": "outsider incentives and agreement durability",
     "tw6": "coalition formation and persistence",
-    "tw7": "group-wide pressure reduction",
+    "tw7": "fractional peer-pressure reduction",
     "tw7_2": "enforcement and evasion",
     "tw8": "sequential withdrawal without authority",
 }
@@ -889,8 +915,10 @@ def _practical_conclusions(summary: str, vocabulary: Mapping[str, Any],
               "names: describe what a number measures instead. Frame every conclusion in the "
               "user's own terms, using their players, decision and forms of cooperation and "
               "defection. Treat paper defaults as assumptions, not measured facts; frame "
-              "conclusions conditionally on the displayed parameter values. Reply with ONLY "
-              "a JSON object "
+              "conclusions conditionally on the displayed parameter values. For the fractional "
+              "peer-pressure scenario, lambda is the fraction removed from baseline peer pressure, "
+              "not a pressure slope; eta only attenuates the reduction in this recurrence and "
+              "does not identify coverage or evasion. Reply with ONLY a JSON object "
               '{"practical_conclusions": ["..."]}')
     user = json.dumps({"situation_summary": summary, "vocabulary": dict(vocabulary),
                        "calculations": digest})
@@ -989,8 +1017,10 @@ RESULT_MATH_LABELS = {
     "k_star_decimal": "$k^*$ (decimal)", "P_peer_5_of_9": "$P(5/9)$",
     "P_peer_6_of_9": "$P(6/9)$", "K": "$K$", "a": "$a$",
     "trajectory": "Adoption trajectory", "exit_multiplier": "Exit multiplier",
-    "release_steps": "Release rounds", "eta_critical": r"$\eta^*$",
-    "lambda_effective": r"$\lambda_{\mathrm{eff}}$", "lambda_reg": r"$\lambda_{\mathrm{reg}}$",
+    "release_steps": "Release rounds",
+    "eta_critical": "Critical attenuation for full adoption ($\\eta^*$)",
+    "lambda_effective": r"$\lambda_{\mathrm{eff}}$ (fraction of baseline pressure removed)",
+    "lambda_reg": r"$\lambda_{\mathrm{reg}}$",
     "lambda_plat": r"$\lambda_{\mathrm{plat}}$", "ratio": r"$\lambda_{\mathrm{reg}}/\lambda_{\mathrm{plat}}$",
     "undiscounted_sum": "Undiscounted sum", "discounted_min": "Discounted minimum",
     "worst_sequence": "Worst sequence", "worst_d_slot": "Worst slot",
@@ -1092,6 +1122,12 @@ _NEUTRAL_CONCLUSIONS = [
     ("parent", "member"),
     ("screen-time", "decision"),
     ("screen time", "decision"),
+    ("a real class", "the modelled situation"),
+    ("conscientious households", "conscientious members"),
+    ("households", "members"),
+    ("household", "member"),
+    ("total cohort", "total population"),
+    ("cohort", "population"),
 ]
 
 
@@ -1212,3 +1248,509 @@ def render_report(report: Mapping[str, Any]) -> str:
                  f"{totals.get('errors', 0)} errors, {total} checks, {total - failed} passed, "
                  f"{failed} failed.")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# General-game orchestration (never touches the paper path above).
+# ---------------------------------------------------------------------------
+
+from game_estimation import analyze_sensitivity, apply_estimates, estimate_game_parameters  # noqa: E402
+from game_models import (GameEnvelope, GameSpecError, SCHEMA_VERSION, TEMPLATE_IDS,  # noqa: E402
+                         compile_template)
+from game_simulation import simulate_game  # noqa: E402
+from game_solvers import (ALL_METHODS, EXACT_METHODS, MethodResult,  # noqa: E402
+                          SolverError, solve_exact_game)
+
+GAME_TEMPLATE_IDS = TEMPLATE_IDS
+
+P3_TEMPLATE_SCOPE = ("Finite heterogeneous one-shot peer-share model. Empty options select the "
+                     "labelled P3 paper benchmark. The paper's repeated-game construction is "
+                     "outside this template.")
+
+
+def list_game_templates() -> list[dict]:
+    templates = []
+    for template_id in GAME_TEMPLATE_IDS:
+        template = {"id": template_id,
+                    "options": gm_TEMPLATE_OPTIONS.get(template_id, [])}
+        if template_id == "p3_heterogeneous":
+            template["default_profile"] = "P3 paper benchmark (9 C, 1 D)"
+            template["scope"] = P3_TEMPLATE_SCOPE
+        templates.append(template)
+    return templates
+
+
+gm_TEMPLATE_OPTIONS = {
+    "pricing_auction": ["auction_rule", "types", "prior", "bid_grids", "values", "tie_rule"],
+    "security_patrol": ["players", "schedules", "targets", "coverage",
+                        "covered_payoff", "uncovered_payoff", "commitment_mode"],
+    "negotiation": ["offer_tree"],
+    "bargaining": ["players", "feasible_points", "disagreement", "randomization"],
+    "public_goods": ["players", "actions", "payoffs"],
+    "mechanism_design": ["mechanism_kind", "design_mode", "type_spaces", "prior", "outcomes",
+                         "feasible_outcomes", "value_table", "outside_option",
+                         "allocation", "transfers", "ic_concept", "ir_scope",
+                         "budget_rule", "objective"],
+    "multi_agent_learning": ["game_id", "parameters"],
+    "p3_heterogeneous": ["type_counts", "thresholds", "payoff_coefficients"],
+    "custom": ["kind"],
+}
+
+
+def _method_result_to_json(result: MethodResult) -> dict:
+    data = {"method": result.method, "status": result.status,
+            "witnesses": result.witnesses, "checks": result.checks,
+            "assumptions": result.assumptions}
+    if result.objective is not None:
+        from game_models import render_rational
+        data["objective"] = render_rational(result.objective)
+    if result.certificate is not None:
+        data["certificate"] = result.certificate
+    if result.epsilon is not None:
+        from game_models import render_rational
+        data["epsilon"] = render_rational(result.epsilon)
+    if result.supremum is not None:
+        from game_models import render_rational
+        data["supremum"] = render_rational(result.supremum)
+    return data
+
+
+def _p3_utility_at(game, profile: Mapping[str, str]) -> dict[str, Fraction]:
+    from game_models import evaluate_cell
+    row = next(row for row in game.payoffs if row["action_profile"] == profile)
+    return {player_id: evaluate_cell(value, {}) for player_id, value in row["utilities"].items()}
+
+
+def _p3_benchmark_evidence(game, witnesses: list[Mapping[str, str]]) -> tuple[dict, list[dict]]:
+    from game_models import render_rational
+
+    player_ids = [player.id for player in game.players]
+    all_a = {player.id: "A" for player in game.players}
+    low_adoption = {player.id: ("A" if player.role == "D" else "R")
+                    for player in game.players}
+    expected_profiles = {
+        tuple(all_a[player_id] for player_id in player_ids),
+        tuple(low_adoption[player_id] for player_id in player_ids),
+    }
+    equilibria = []
+    utilities_by_label = {}
+    checks = []
+    for profile in witnesses:
+        utilities = _p3_utility_at(game, profile)
+        if all(action == "A" for action in profile.values()):
+            label = "all-A"
+        elif dict(profile) == low_adoption:
+            label = "low-adoption"
+        else:
+            label = "other"
+        strict_checks = []
+        for player in game.players:
+            for action in game.actions[player.id]:
+                if action == profile[player.id]:
+                    continue
+                deviation = dict(profile)
+                deviation[player.id] = action
+                loss = utilities[player.id] - _p3_utility_at(game, deviation)[player.id]
+                strict_checks.append({
+                    "name": f"{label}: {player.id} switching to {action} loses utility",
+                    "ok": loss > 0,
+                    "expected": "positive utility loss",
+                    "got": render_rational(loss),
+                })
+        strict = all(check["ok"] for check in strict_checks)
+        utilities_by_label[label] = utilities
+        type_utilities = {}
+        for role in {player.role for player in game.players}:
+            role_utilities = {player.id: utilities[player.id]
+                              for player in game.players if player.role == role}
+            distinct = set(role_utilities.values())
+            type_utilities[role] = (
+                render_rational(next(iter(distinct))) if len(distinct) == 1
+                else {player_id: render_rational(value)
+                      for player_id, value in role_utilities.items()})
+        equilibria.append({
+            "label": label,
+            "action_profile": dict(profile),
+            "utility_by_type": type_utilities,
+            "utility_by_player": {player_id: render_rational(value)
+                                  for player_id, value in utilities.items()},
+            "total_utility": render_rational(sum(utilities.values(), Fraction(0))),
+            "strict_nash": strict,
+        })
+        checks.extend(strict_checks)
+
+    profile_keys = {tuple(profile.get(player_id) for player_id in player_ids)
+                    for profile in witnesses}
+    strict_count = sum(row["strict_nash"] for row in equilibria)
+    checks.extend([
+        {"name": "P3 pure Nash set contains the two benchmark profiles",
+         "ok": profile_keys == expected_profiles,
+         "expected": "all-A and low-adoption",
+         "got": sorted(row["label"] for row in equilibria)},
+        {"name": "both P3 pure Nash profiles are strict",
+         "ok": len(equilibria) == 2 and strict_count == 2,
+         "expected": "2 strict profiles",
+         "got": f"{len(equilibria)} profiles, {strict_count} strict"},
+    ])
+
+    welfare_comparison = None
+    baseline = utilities_by_label.get("all-A")
+    candidate = utilities_by_label.get("low-adoption")
+    if baseline is not None and candidate is not None:
+        changes_by_type = {}
+        changes = {}
+        for role in {player.role for player in game.players}:
+            role_changes = {player.id: candidate[player.id] - baseline[player.id]
+                            for player in game.players if player.role == role}
+            changes.update(role_changes)
+            distinct = set(role_changes.values())
+            changes_by_type[role] = (
+                render_rational(next(iter(distinct))) if len(distinct) == 1
+                else {player_id: render_rational(value)
+                      for player_id, value in role_changes.items()})
+        pareto_improvement = all(change >= 0 for change in changes.values()) and any(
+            change > 0 for change in changes.values())
+        welfare_comparison = {
+            "baseline": "all-A",
+            "candidate": "low-adoption",
+            "utility_change_by_type": changes_by_type,
+            "pareto_improvement": pareto_improvement,
+        }
+        all_a_total = sum(baseline.values(), Fraction(0))
+        low_total = sum(candidate.values(), Fraction(0))
+        checks.extend([
+            {"name": "P3 all-A total utility is 10",
+             "ok": all_a_total == 10, "expected": "10",
+             "got": render_rational(all_a_total)},
+            {"name": "P3 low-adoption total utility is 223/18",
+             "ok": low_total == Fraction(223, 18), "expected": "223/18",
+             "got": render_rational(low_total)},
+            {"name": "P3 low-adoption is not a Pareto improvement",
+             "ok": not pareto_improvement and changes_by_type.get("D") == "-1",
+             "expected": "D loses 1 utility unit",
+             "got": changes_by_type},
+        ])
+
+    evidence = {
+        "equilibrium_count": len(equilibria),
+        "pure_nash_count": len(equilibria),
+        "strict_pure_nash_count": strict_count,
+        "equilibria": equilibria,
+        "welfare_comparison": welfare_comparison,
+    }
+    return evidence, checks
+
+
+def _p3_game_evidence(game, witnesses: list[Mapping[str, str]]) -> tuple[dict, list[dict]]:
+    from game_models import render_rational
+
+    equilibria = []
+    checks = []
+    strict_count = 0
+    for index, profile in enumerate(witnesses, start=1):
+        utilities = _p3_utility_at(game, profile)
+        deviation_checks = []
+        strict_deviations = []
+        for player in game.players:
+            for action in game.actions[player.id]:
+                if action == profile[player.id]:
+                    continue
+                deviation = dict(profile)
+                deviation[player.id] = action
+                gain = _p3_utility_at(game, deviation)[player.id] - utilities[player.id]
+                strict_deviations.append(gain < 0)
+                deviation_checks.append({
+                    "name": f"{player.id} switching to {action} has no profitable deviation",
+                    "ok": gain <= 0,
+                    "expected": "utility gain <= 0",
+                    "got": render_rational(gain),
+                })
+        strict = all(strict_deviations)
+        strict_count += strict
+        checks.extend(deviation_checks)
+        type_utilities = {}
+        for role in dict.fromkeys(player.role for player in game.players):
+            role_utilities = {
+                player.id: utilities[player.id]
+                for player in game.players if player.role == role
+            }
+            distinct = set(role_utilities.values())
+            type_utilities[role] = (
+                render_rational(next(iter(distinct))) if len(distinct) == 1
+                else {player_id: render_rational(value)
+                      for player_id, value in role_utilities.items()})
+        equilibria.append({
+            "label": f"equilibrium-{index}",
+            "action_profile": dict(profile),
+            "utility_by_type": type_utilities,
+            "utility_by_player": {player_id: render_rational(value)
+                                  for player_id, value in utilities.items()},
+            "total_utility": render_rational(sum(utilities.values(), Fraction(0))),
+            "strict_nash": strict,
+        })
+    return {
+        "equilibrium_count": len(equilibria),
+        "pure_nash_count": len(equilibria),
+        "strict_pure_nash_count": strict_count,
+        "equilibria": equilibria,
+    }, checks
+
+
+def _attach_p3_evidence(envelope: GameEnvelope,
+                                  method_results: list[dict]) -> None:
+    if envelope.template_id != "p3_heterogeneous":
+        return
+    benchmark = not envelope.template_options
+    for result in method_results:
+        if result.get("method") != "pure_nash":
+            continue
+        if benchmark:
+            evidence, checks = _p3_benchmark_evidence(envelope.game, result["witnesses"])
+            result["benchmark_evidence"] = evidence
+            error = "P3 paper benchmark verification failed"
+        else:
+            evidence, checks = _p3_game_evidence(envelope.game, result["witnesses"])
+            result["p3_evidence"] = evidence
+            error = "P3 exact payoff verification failed"
+        result["checks"].extend(checks)
+        if not all(check["ok"] for check in checks):
+            result["status"] = "error"
+            result["error"] = error
+
+
+def solve_game(game_spec: Mapping[str, Any], confirmed_by_user: bool,
+               methods: list[str] | None = None, epsilon: Any = None,
+               mediator_confirmed: bool = False) -> dict:
+    """Run exact (and optionally epsilon) methods over a canonical game spec."""
+    if not confirmed_by_user:
+        return {"schema_version": SCHEMA_VERSION, "disposition": "needs_confirmation"}
+    try:
+        envelope = _build_envelope_from_payload(game_spec)
+    except GameSpecError as exc:
+        return {"schema_version": SCHEMA_VERSION, "disposition": "invalid", "error": str(exc)}
+    requested = list(methods) if methods is not None else None
+    if requested:
+        known = set(ALL_METHODS)
+        for name in requested:
+            if name not in known:
+                return {"schema_version": SCHEMA_VERSION, "disposition": "invalid",
+                        "error": f"unknown method {name!r}"}
+    epsilon_frac = None
+    if epsilon is not None:
+        from game_models import to_rational
+        try:
+            epsilon_frac = to_rational(epsilon, "epsilon")
+        except (GameSpecError, TypeError, ValueError) as exc:
+            return {"schema_version": SCHEMA_VERSION, "disposition": "invalid",
+                    "error": f"epsilon must be an exact rational: {exc}"}
+        if epsilon_frac <= 0:
+            return {"schema_version": SCHEMA_VERSION, "disposition": "invalid",
+                    "error": "epsilon must be a positive rational"}
+    game = envelope.game
+    incompatible = [name for name in (requested or []) if name != "epsilon_nash"
+                    and not _method_compatible(name, game)]
+    if requested and len(incompatible) == len([m for m in requested if m != "epsilon_nash"]) \
+            and epsilon_frac is None:
+        return {"schema_version": SCHEMA_VERSION, "disposition": "unsupported",
+                "error": f"no requested method is compatible: {incompatible}"}
+    method_results: list[dict] = []
+    exact_enabled = requested is None or any(m != "epsilon_nash" for m in requested)
+    if exact_enabled:
+        try:
+            for result in solve_exact_game(envelope, mediator_confirmed=mediator_confirmed,
+                                           methods=requested):
+                method_results.append(_method_result_to_json(result))
+        except (GameSpecError, SolverError) as exc:
+            method_results.append({"method": "solve_exact_game", "status": "error",
+                                   "error": str(exc)})
+    if epsilon_frac is not None and (requested is None or "epsilon_nash" in requested):
+        from game_solvers import solve_epsilon_nash
+        if type(game).__name__ == "NormalFormGame":
+            method_results.append(_method_result_to_json(
+                solve_epsilon_nash(game, epsilon_frac)))
+        else:
+            method_results.append({"method": "epsilon_nash", "status": "unsupported",
+                                   "assumptions": ["epsilon_nash supports finite "
+                                                   "normal-form games only"]})
+    _attach_p3_evidence(envelope, method_results)
+    return {"schema_version": SCHEMA_VERSION, "disposition": "ok",
+            "normalized_game": _normalized_game_json(envelope),
+            "method_results": method_results}
+
+
+def _method_compatible(name: str, game) -> bool:
+    from game_models import (BargainingSpec, BayesianGame, ExtensiveFormGame,
+                             MechanismSpec, NormalFormGame, RepeatedGame, StackelbergGame)
+    table = {
+        "pure_nash": (NormalFormGame, StackelbergGame),
+        "mixed_nash": (NormalFormGame, ExtensiveFormGame),
+        "bayesian_nash": (BayesianGame,),
+        "subgame_perfect": (ExtensiveFormGame,),
+        "correlated_equilibrium": (NormalFormGame,),
+        "nash_bargaining": (BargainingSpec,),
+        "stackelberg": (StackelbergGame,),
+        "mechanism_optimum": (MechanismSpec,),
+    }
+    return isinstance(game, table.get(name, ()))
+
+
+def _build_envelope_from_payload(game_spec: Mapping[str, Any]) -> GameEnvelope:
+    if not isinstance(game_spec, Mapping):
+        raise GameSpecError("game_spec must be an object")
+    template_id = game_spec.get("template_id", "custom")
+    template_options = game_spec.get("template_options") or {}
+    if template_id == "p3_heterogeneous":
+        if game_spec.get("game") not in (None, {}):
+            raise GameSpecError("p3_heterogeneous does not accept custom game data")
+        if game_spec.get("parameters"):
+            raise GameSpecError("p3_heterogeneous does not accept external parameters")
+        if game_spec.get("commitment_rights", "none") != "none":
+            raise GameSpecError("p3_heterogeneous does not use commitment rights")
+        if game_spec.get("analysis_role", "observer") != "observer":
+            raise GameSpecError("p3_heterogeneous uses the observer analysis role")
+        envelope = compile_template(template_id, template_options)
+        return _apply_envelope_extras(envelope, game_spec)
+    if template_id != "custom" or game_spec.get("game"):
+        payload = game_spec.get("game")
+        if payload:
+            envelope = compile_template(template_id, template_options, payload)
+            return _apply_envelope_extras(envelope, game_spec)
+    envelope = compile_template(template_id, template_options, game_spec.get("game") or game_spec)
+    return _apply_envelope_extras(envelope, game_spec)
+
+
+def _apply_envelope_extras(envelope: GameEnvelope, payload: Mapping[str, Any]) -> GameEnvelope:
+    from game_models import ParameterSpec, to_rational
+    for name, raw in (payload.get("parameters") or {}).items():
+        if isinstance(raw, ParameterSpec):
+            envelope.parameters[name] = raw
+        elif isinstance(raw, Mapping):
+            value = raw.get("value")
+            envelope.parameters[name] = ParameterSpec(
+                name=name,
+                value=None if value is None else to_rational(value, f"parameter {name}"),
+                lower_bound=None if raw.get("lower_bound") is None
+                else to_rational(raw["lower_bound"], f"parameter {name} lower"),
+                upper_bound=None if raw.get("upper_bound") is None
+                else to_rational(raw["upper_bound"], f"parameter {name} upper"),
+                prior=raw.get("prior"),
+                unit=raw.get("unit", "utility"),
+                provenance=raw.get("provenance") or {"origin": "user_stated",
+                                                     "source": "user"})
+    envelope.commitment_rights = payload.get("commitment_rights", envelope.commitment_rights)
+    envelope.analysis_role = payload.get("analysis_role", envelope.analysis_role)
+    if payload.get("assumptions"):
+        envelope.assumptions.extend(payload["assumptions"])
+    envelope.validate()
+    return envelope
+
+
+def _normalized_game_json(envelope: GameEnvelope) -> dict:
+    game = envelope.game
+    return {"kind": type(game).__name__,
+            "template_id": envelope.template_id,
+            "players": [p.to_json() for p in getattr(game, "players", [])],
+            "assumptions": envelope.assumptions}
+
+
+NO_CLARIFICATION_RULE = (
+    "\n- The user has already been asked once. Do not ask again: choose the closest template "
+    "and fill any detail you are missing with a sensible default."
+)
+
+
+def infer_game_model(messages: list[dict], client=None, config=None, asked_already=False) -> dict:
+    """LLM intake for general games: never runs a worker."""
+    config = config or load_config()
+    if client is None:
+        import openai
+        client = openai.OpenAI(base_url=config.base_url, api_key=config.api_key or "none")
+    system = build_game_intake_prompt() + (NO_CLARIFICATION_RULE if asked_already else "")
+    history = [{"role": "system", "content": system}, *(messages or [])]
+    for attempt in (1, 2):
+        try:
+            completion = client.chat.completions.create(model=config.model,
+                                                        messages=history, temperature=0)
+        except Exception as exc:
+            raise InferenceError(f"LLM request failed: {exc}") from exc
+        raw = completion.choices[0].message.content or ""
+        try:
+            parsed = _parse_json_object(raw)
+        except (ValueError, json.JSONDecodeError) as exc:
+            if attempt == 1:
+                history = history + [{"role": "assistant", "content": raw},
+                                     {"role": "user",
+                                      "content": f"Invalid JSON: {exc}. Reply with ONLY the "
+                                                 "JSON object described."}]
+                continue
+            raise InferenceError(f"LLM returned invalid JSON: {raw[:400]}") from exc
+        parsed["raw"] = raw
+        parsed["model"] = config.model
+        if parsed.get("disposition") == "clarification":
+            parsed["questions"] = _intake_questions(parsed.get("questions"))
+        return parsed
+    raise InferenceError("LLM did not return parseable JSON")
+
+
+MAX_INTAKE_QUESTIONS = 2
+
+
+def _intake_questions(questions) -> list[str]:
+    if not isinstance(questions, list):
+        return []
+    clean = [q.strip() for q in questions if isinstance(q, str) and q.strip()]
+    return clean[:MAX_INTAKE_QUESTIONS]
+
+
+def build_game_intake_prompt() -> str:
+    return "\n".join([
+        "You are a game-theory intake analyst. Classify the user's situation.",
+        "Reply with ONLY one JSON object of this shape:",
+        json.dumps({
+            "disposition": "clarification|unsupported|invalid|needs_confirmation",
+            "questions": [],
+            "template_id": "pricing_auction|security_patrol|negotiation|bargaining|"
+                           "public_goods|mechanism_design|multi_agent_learning|"
+                           "p3_heterogeneous|custom",
+            "template_options": {},
+            "game": None,
+            "notes": "",
+        }, indent=2),
+        "Rules:",
+        "- clarification: only when a whole side or a whole set of outcomes is still missing. "
+        "Ask at most 2 questions, and only once in a conversation.",
+        "- Write questions the way you would ask a friend who knows no game theory. Never use "
+        "the words payoff, utility, Nash, equilibrium, strategy, player, type, threshold, or "
+        "coefficient in a question. Ask about the real situation instead: who decides, what "
+        "each side can do, and which result each side prefers.",
+        "- Infer the game-theory structure yourself from the answers. Never ask the user to "
+        "name a concept, and never ask for numbers the user has not mentioned unless a whole "
+        "outcome is unscored.",
+        "- unsupported: outside game theory (weather, chat, math homework).",
+        "- invalid: game-theoretic but impossible to formalize with exact rationals.",
+        "- needs_confirmation: a complete typed draft; fill template_id, template_options "
+        "and, for custom, the canonical game object. Use exact rationals "
+        "(integers, 'a/b', decimal strings). Never execute formulas; propose typed fields only.",
+        "- Never ask about anything the user already stated. If players, their options and "
+        "a score for every outcome are given, reply needs_confirmation, not clarification. "
+        "Assume everyone chooses at the same time unless told otherwise.",
+        "- p3_heterogeneous models a finite heterogeneous one-shot peer-share game, separate "
+        "from homogeneous paper scenario tw3. Empty template_options select the clearly "
+        "labelled P3 paper benchmark: 9 type-C players with tau=3/2, 1 type-D player "
+        "with tau=-1, f(k)=k, and E(k)=k+k^2.",
+        "- For other P3 games, never substitute benchmark defaults. Require complete "
+        "type_counts, thresholds, and payoff_coefficients: f has constant and linear "
+        "rational coefficients; E has constant, linear, and quadratic rational "
+        "coefficients. Use u(A,k)=f(k), u(R,k)=tau-E(k), with tau the type's "
+        "threshold and k the A share among the other players.",
+        "- The template does not implement the paper's repeated-game construction. "
+        "Current repeated-game support only simulates named public policies in "
+        "two-player finite-horizon games; repeated-game equilibria are unsupported.",
+        "Simultaneous game with stated scores: template_id custom and game shaped like this "
+        "(one payoffs row for EVERY combination of options):",
+        json.dumps({"kind": "normal_form",
+                    "players": [{"id": "a", "name": "Cafe A"}, {"id": "b", "name": "Cafe B"}],
+                    "actions": {"a": ["low", "high"], "b": ["low", "high"]},
+                    "payoffs": [{"action_profile": {"a": "low", "b": "high"},
+                                 "utilities": {"a": 7, "b": 1}}]}),
+    ])

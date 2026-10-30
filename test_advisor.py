@@ -57,6 +57,19 @@ def _path_value(data, path):
     return _expected_display(data)
 
 
+def _assert_tw7_semantics(evidence):
+    params = evidence["params"]
+    effective = F(params["lam"]) * (1 - F(params["eta"]))
+    assert F(evidence["results"]["lambda_effective"]) == effective
+
+    conclusion = " ".join(evidence["conclusion"]).casefold()
+    assert "fraction of baseline peer pressure removed" in conclusion
+    assert "100 * (1 - lambda) * k" in conclusion
+    assert "pressure slope" not in conclusion
+    assert "lambda * (1 - eta)" in conclusion
+    assert "neither group coverage nor evasion" in conclusion
+
+
 EXPECTED_STRATEGY_LAYOUTS = {
     "tw1": [
         ("Cooperate together (all-R)", "payoff of staying out; cost of the lone deviator",
@@ -116,10 +129,12 @@ EXPECTED_STRATEGY_LAYOUTS = {
           "exit multiplier": "exit_multiplier"}),
     ],
     "tw7": [
-        ("Rule covers part of the group", "effective pressure and resulting adoption limit",
-         {"effective pressure": "lambda_effective", "adoption limit": "limit"}),
-        ("No rule (eta = 0)", "baseline: the same toolkit function called with eta = 0",
-         {"effective pressure": "lambda_effective", "adoption limit": "limit"}),
+        ("Pressure reduction after eta attenuation",
+         "effective fraction of baseline peer pressure removed and resulting adoption limit",
+         {"effective fraction removed": "lambda_effective", "adoption limit": "limit"}),
+        ("Unattenuated pressure reduction (eta = 0)",
+         "baseline with the full specified lambda reduction; same toolkit function with eta = 0",
+         {"effective fraction removed": "lambda_effective", "adoption limit": "limit"}),
     ],
     "tw7_2": [
         ("Statutory limits", "share of the pressure reduction carried by regulation",
@@ -271,8 +286,11 @@ def test_run_scenarios_matches_toolkit_results_and_checks():
     for actual, expected in zip(evidence, toolkit["results"]):
         assert actual["results"] == _expected_display(expected["results"]), actual["scenario"]
         assert actual["checks"] == expected["checks"], actual["scenario"]
-        assert actual["conclusion"] == [advisor._neutral_conclusion(s)
-                                        for s in expected["conclusion"]], actual["scenario"]
+        if actual["scenario"] == "tw7":
+            _assert_tw7_semantics(actual)
+        else:
+            assert actual["conclusion"] == [advisor._neutral_conclusion(s)
+                                            for s in expected["conclusion"]], actual["scenario"]
         assert actual["strategies"], actual["scenario"]
 
 
@@ -425,16 +443,30 @@ def test_strategy_views_match_independent_toolkit_expectations():
             expected.append({"strategy": strategy, "outcome": outcome, "values": expected_values})
         assert actual == expected, scenario_id
 
-    varied = advisor.run_one_scenario("tw7", {"eta": F(1, 2)})["strategies"]
-    assert varied[0]["values"] == {"effective pressure": "1/10", "adoption limit": "1/2"}
-    assert varied[1]["values"] == {"effective pressure": "1/5", "adoption limit": "1/4"}
+    func, defaults = gt.SCENARIOS["tw7"]
+    lam, eta = F(1, 5), F(1, 2)
+    varied_sources = [
+        func(**{**defaults, "lam": lam, "eta": eta})["results"],
+        func(**{**defaults, "lam": lam, "eta": F(0)})["results"],
+    ]
+    varied = advisor.run_one_scenario("tw7", {"lam": lam, "eta": eta})["strategies"]
+    for row, source, layout in zip(varied, varied_sources, EXPECTED_STRATEGY_LAYOUTS["tw7"]):
+        bindings = layout[2]
+        assert row["values"] == {label: _path_value(source, path)
+                                 for label, path in bindings.items()}
 
 
-def test_mcp_server_registers_four_tools():
+def test_mcp_server_registers_paper_and_general_tools():
     import mcp_server
     tools = asyncio.run(mcp_server.mcp.list_tools())
-    assert sorted(tool.name for tool in tools) == ["analyze_situation", "infer_parameters",
-                                                   "list_scenarios", "run_scenario"]
+    names = {tool.name for tool in tools}
+    # the original paper-scenario contracts stay registered
+    assert {"analyze_situation", "infer_parameters", "list_scenarios",
+            "run_scenario"} <= names
+    # the general-game surface adds these
+    assert {"list_game_templates", "infer_game_model", "solve_game",
+            "estimate_game_parameters", "analyze_sensitivity", "simulate_game",
+            "save_case", "list_cases", "load_case", "delete_case"} <= names
 
 
 def test_mcp_success_payloads_include_status(monkeypatch):
@@ -481,7 +513,8 @@ def test_query_is_labeled_and_examples_precede_results():
     assert textbox["props"]["label"] == "Describe the situation"
     assert examples < chatbot < evidence
     textbox_id = textbox["id"]
-    submit = [d for d in config["dependencies"] if d["targets"][0][1] == "submit"]
+    submit = [d for d in config["dependencies"] if d["targets"][0] == [textbox_id, "submit"]
+              or tuple(d["targets"][0]) == (textbox_id, "submit")]
     assert submit and all(textbox_id in d["outputs"] for d in submit)
 
 
@@ -495,7 +528,7 @@ def test_respond_keeps_full_report_out_of_chat_and_clears_input(monkeypatch):
         "scenarios": [],
         "totals": {"scenarios": 10},
     })
-    chat, state, markdown, raw, cleared = webapp.respond([], [], "A public goods game")
+    chat, state, markdown, raw, cleared, md_state, html_state = webapp.respond([], [], "A public goods game")
     assert chat[-1]["content"] != full_report
     assert "analysis complete" in chat[-1]["content"].lower()
     assert state[-1] == chat[-1]
@@ -542,8 +575,8 @@ def test_respond_clears_submitted_input_and_keeps_report_out_of_chat(monkeypatch
         "totals": {"scenarios": 10},
     })
     result = webapp.respond([], [], "A public goods game")
-    assert len(result) == 5
-    chat, state, markdown, raw, cleared_input = result
+    assert len(result) == 7
+    chat, state, markdown, raw, cleared_input, md_state, html_state = result
     assert chat[-1]["content"] != full_report
     assert "analysis complete" in chat[-1]["content"].lower()
     assert state[-1] == chat[-1]
@@ -560,7 +593,7 @@ def test_respond_clears_input_after_analysis_error(monkeypatch):
 
     monkeypatch.setattr(webapp.advisor, "analyze_situation", fail)
     result = webapp.respond([], [], "A coordination game")
-    assert len(result) == 5
+    assert len(result) == 7
     assert result[0][-1]["content"] == "Analysis failed: backend unavailable"
     assert "backend unavailable" in result[2]
     assert result[3] == {}
@@ -645,7 +678,7 @@ def test_prompt_demands_stated_numbers():
 
 
 def test_conclusions_are_domain_neutral_for_every_scenario():
-    banned = ("parent", "social media", "screen", "famil")
+    banned = ("parent", "social media", "screen", "famil", "class", "cohort", "household")
     for scenario_id in SCENARIO_IDS:
         result = advisor.run_one_scenario(scenario_id, {})
         assert result["status"] == "ok", scenario_id
@@ -736,7 +769,7 @@ def test_gated_response_webapp_renders_questions(monkeypatch):
              "situation_summary": "", "vocabulary": {},
              "markdown": "## Clarifying questions\n\n1. Who are the players?"}
     monkeypatch.setattr(advisor, "analyze_situation", lambda messages: dict(gated))
-    chat, state, markdown, raw, cleared = webapp.respond([], [], "something vague")
+    chat, state, markdown, raw, cleared, md_state, html_state = webapp.respond([], [], "something vague")
     assistant = [m["content"] for m in chat if m["role"] == "assistant"]
     assert any("Before I run the numbers:" in content for content in assistant)
     assert any("1. Who are the players?" in content for content in assistant)
@@ -835,12 +868,12 @@ def test_calculations_summary_table():
     assert f"| tw1 | ok | {passed}/{len(evidence['checks'])} |" in markdown
 
 
-def test_tw6_gamma_report_uses_total_cohort_denominator():
+def test_tw6_gamma_report_uses_total_population_denominator():
     item = advisor.run_one_scenario("tw6", {})
     conclusion = " ".join(item["conclusion"])
     meaning = advisor.CATALOG["tw6"]["params"]["gamma"]["meaning"].lower()
-    assert "22.5% of the total cohort" in conclusion.lower()
-    assert "25% of conscientious households" in conclusion.lower()
+    assert "22.5% of the total population" in conclusion.lower()
+    assert "25% of conscientious members" in conclusion.lower()
     assert "total cohort" in meaning
 
 
@@ -952,3 +985,201 @@ def test_math_text_handles_unmatched_dollar_with_many_backslashes():
     except subprocess.TimeoutExpired:
         result = None
     assert result is not None and result.stdout.strip() == "True"
+
+
+def test_game_solve_rejects_invalid_json():
+    import webapp
+    out = webapp.game_solve("{not json", True)
+    assert out[0]["disposition"] == "invalid"
+    assert "bad JSON" in out[0]["error"]
+
+
+def _intake_outputs(monkeypatch, parsed):
+    import webapp
+    monkeypatch.setattr(webapp.advisor, "infer_game_model",
+                        lambda messages, **kwargs: parsed)
+    return webapp.game_intake([], "two cartel members choose output")
+
+
+def _assert_accepted_by_gradio_outputs(outputs):
+    import gradio as gr
+    state, chat, note, spec, answer = outputs
+    gr.Markdown().postprocess(note)
+    gr.Markdown().postprocess(answer)
+    assert isinstance(spec, str) and isinstance(state, list)
+
+
+def test_game_intake_empty_text_skips_llm(monkeypatch):
+    import webapp
+
+    def boom(messages, **kwargs):
+        raise AssertionError("LLM must not be called for empty intake")
+
+    monkeypatch.setattr(webapp.advisor, "infer_game_model", boom)
+    outputs = webapp.game_intake([], "   ")
+    assert outputs[0] == [] and outputs[1]["visible"] is False
+    assert outputs[3] == "" and "Describe the situation" in outputs[2]
+    _assert_accepted_by_gradio_outputs(outputs)
+
+
+def test_game_intake_every_disposition_feeds_gradio_json_outputs(monkeypatch):
+    parsed_by_disposition = {
+        "clarification": {"disposition": "clarification", "questions": ["How many firms?"]},
+        "unsupported": {"disposition": "unsupported"},
+        "invalid": {"disposition": "invalid"},
+        "needs_confirmation": {"disposition": "needs_confirmation", "game": {"players": []}},
+    }
+    for parsed in parsed_by_disposition.values():
+        _assert_accepted_by_gradio_outputs(_intake_outputs(monkeypatch, parsed))
+
+
+def test_game_intake_llm_failure_feeds_gradio_json_outputs(monkeypatch):
+    import webapp
+
+    def fail(messages, **kwargs):
+        raise RuntimeError("gateway down")
+
+    monkeypatch.setattr(webapp.advisor, "infer_game_model", fail)
+    _assert_accepted_by_gradio_outputs(webapp.game_intake([], "any game"))
+
+
+def test_game_intake_draft_populates_spec_box(monkeypatch):
+    outputs = _intake_outputs(monkeypatch, {"disposition": "needs_confirmation",
+                                            "template_id": "custom", "game": {"k": 1}})
+    assert '"template_id": "custom"' in outputs[3]
+
+
+def test_case_save_rejects_unparseable_spec_without_touching_store(monkeypatch):
+    import webapp
+
+    def boom():
+        raise AssertionError("store must not be opened for an unparseable spec")
+
+    monkeypatch.setattr(webapp, "_case_store", boom)
+    for bad in ("", "{not json", None):
+        out = webapp.case_save("t", bad, True)
+        assert out["status"] == "invalid" and "bad JSON" in out["error"]
+
+
+def test_public_link_empty_markdown_needs_no_network(monkeypatch):
+    import webapp
+
+    def boom(*args, **kwargs):
+        raise AssertionError("share worker must not be called without content")
+
+    monkeypatch.setattr(webapp.share_report, "public_share_link", boom)
+    assert "Run an analysis first" in webapp._public_link("", "t")
+    assert "Run an analysis first" in webapp.game_public_link(None)
+
+
+def test_intake_prompt_caps_and_keeps_questions_plain():
+    prompt = advisor.build_game_intake_prompt()
+    assert "Ask at most 2 questions, and only once" in prompt
+    assert "Never use the words payoff, utility, Nash, equilibrium" in prompt
+
+
+def test_infer_game_model_caps_clarification_questions():
+    payload = json.dumps({"disposition": "clarification",
+                          "questions": ["Who decides?", "What can each side do?",
+                                        "Which result do they prefer?"]})
+    parsed = advisor.infer_game_model([{"role": "user", "content": "a situation"}],
+                                      client=_StubClient([payload]),
+                                      config=advisor.load_config({}))
+    assert parsed["questions"] == ["Who decides?", "What can each side do?"]
+
+
+def test_infer_game_model_leaves_non_clarification_questions_alone():
+    payload = json.dumps({"disposition": "needs_confirmation", "questions": ["a", "b", "c"]})
+    parsed = advisor.infer_game_model([{"role": "user", "content": "a situation"}],
+                                      client=_StubClient([payload]),
+                                      config=advisor.load_config({}))
+    assert parsed["questions"] == ["a", "b", "c"]
+
+
+def test_intake_questions_keeps_only_non_empty_strings():
+    assert advisor._intake_questions(["a", None, "  ", "b", "c"]) == ["a", "b"]
+    assert advisor._intake_questions("nope") == []
+    assert advisor._intake_questions(None) == []
+
+
+def test_game_intake_clarification_without_questions_asks_for_structure(monkeypatch):
+    outputs = _intake_outputs(monkeypatch, {"disposition": "clarification", "questions": []})
+    assert "who is involved" in outputs[2].lower()
+    _assert_accepted_by_gradio_outputs(outputs)
+
+
+def test_game_intake_clarification_points_at_the_input_box(monkeypatch):
+    outputs = _intake_outputs(monkeypatch,
+                              {"disposition": "clarification",
+                               "questions": ["How many factories are there?"]})
+    assert "box above" in outputs[2]
+    assert "How many factories are there?" in outputs[1]["value"][-1]["content"]
+
+
+def test_game_intake_forwards_asked_already_after_one_round(monkeypatch):
+    import webapp
+    seen = {}
+
+    def stub(messages, **kwargs):
+        seen.update(kwargs)
+        return {"disposition": "needs_confirmation", "template_id": "custom", "game": {"k": 1}}
+
+    monkeypatch.setattr(webapp.advisor, "infer_game_model", stub)
+    history = [{"role": "user", "content": "two factories"},
+               {"role": "assistant", "content": "A couple of questions:\n1. How many?"}]
+    webapp.game_intake(history, "two")
+    assert seen["asked_already"] is True
+
+
+def test_game_intake_first_turn_does_not_suppress_questions(monkeypatch):
+    import webapp
+    seen = {}
+
+    def stub(messages, **kwargs):
+        seen.update(kwargs)
+        return {"disposition": "clarification", "questions": ["Who decides?"]}
+
+    monkeypatch.setattr(webapp.advisor, "infer_game_model", stub)
+    webapp.game_intake([], "two factories")
+    assert seen["asked_already"] is False
+
+
+def test_game_intake_never_asks_a_second_round(monkeypatch):
+    import webapp
+    history = [{"role": "user", "content": "something vague"},
+               {"role": "assistant", "content": "A couple of questions:\n1. Who decides?"}]
+    monkeypatch.setattr(webapp.advisor, "infer_game_model",
+                        lambda messages, **kwargs: {"disposition": "clarification",
+                                                    "questions": ["Which result do they prefer?"]})
+    outputs = webapp.game_intake(history, "still vague")
+    chat = outputs[1]["value"]
+    assert [m["role"] for m in chat] == ["user", "assistant", "user", "assistant"]
+    assert "Which result do they prefer?" not in chat[-1]["content"]
+    assert "cannot see who is involved" in chat[-1]["content"]
+    assert "box above" not in outputs[2]
+    assert "concrete example" in outputs[2]
+
+
+def test_infer_game_model_appends_no_repeat_rule_only_when_asked(monkeypatch):
+    payload = json.dumps({"disposition": "needs_confirmation", "game": {"players": []}})
+    prompts = []
+
+    class Recording:
+        def __init__(self, inner):
+            self.chat = self
+            self.completions = self
+            self.inner = inner
+
+        def create(self, model, messages, temperature):
+            prompts.append(messages[0]["content"])
+            return self.inner.chat.completions.create(model=model, messages=messages,
+                                                      temperature=temperature)
+
+    for asked in (False, True):
+        inner = _StubClient([payload])
+        advisor.infer_game_model([{"role": "user", "content": "a situation"}],
+                                 client=Recording(inner), config=advisor.load_config({}),
+                                 asked_already=asked)
+    assert advisor.NO_CLARIFICATION_RULE.strip() not in prompts[0]
+    assert advisor.NO_CLARIFICATION_RULE.strip() in prompts[1]
+
