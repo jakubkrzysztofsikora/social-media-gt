@@ -42,7 +42,7 @@ Repo: `~/Repos/personal/math/social-media-gt`. Live: <https://social-gt.tail5d39
 | # | Item | Severity | Note |
 | --- | --- | --- | --- |
 | O1 | GPL-2.0-or-later legal review of distributing the `pygambit` sdist | medium | notices are in place; sign-off is a human decision, not a code change |
-| O2 | 25 Python modules (including `game_models.py`, `plain_view.py`, `solver_worker.py`, `case_store.py`) are untracked in git | medium | the image is built from the working tree, so the deployed artifact has no commit to point at |
+| O2 | ~~25 Python modules are untracked in git~~ | resolved | all modules, tests, manifests and docs are committed; `main` = `d318a69`, tag `v-audit-neutral`; pod files are byte-identical to `HEAD` |
 | O3 | `requirements.txt` mixes pins with open ranges (`z3-solver>=4.12`, `openai>=1.40`, `python-dotenv>=1.0`, `numpy>=2.0`, `pytest>=8`) | medium | image builds are not reproducible; the Dockerfile wheelhouse also omits `gradio`, `openai`, `python-dotenv`, `z3-solver`, so the build needs PyPI access |
 | O4 | MCP server and share worker were not exercised live in this audit | low | verified by unit tests and in-pod imports only |
 | O5 | `#game-input` lives only in the second tab | low | not a defect, but browser probes must switch tabs before waiting on it; the login page is a Gradio form, not HTTP basic auth |
