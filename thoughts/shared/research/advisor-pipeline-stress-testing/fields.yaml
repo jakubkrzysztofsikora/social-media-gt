@@ -1,0 +1,92 @@
+categories:
+  - name: test_identity
+    fields:
+      - name: item_id
+        description: Stable identifier for the research or test-plan item.
+        detail_level: brief
+      - name: research_area
+        description: Pipeline surface such as scope, injection, math, rendering, or integration.
+        detail_level: brief
+      - name: risk_hypothesis
+        description: Concrete failure claim that the test is intended to detect.
+        detail_level: moderate
+      - name: rationale
+        description: Why this failure matters to users, correctness, safety, or cost.
+        detail_level: moderate
+  - name: scenario_design
+    fields:
+      - name: threat_or_edge_input
+        description: Sanitized input or generated boundary condition used for the test.
+        detail_level: detailed
+      - name: preconditions
+        description: Required model, environment, conversation state, and test data.
+        detail_level: moderate
+      - name: test_method
+        description: Direct unit, property-based, differential, integration, browser, or red-team method.
+        detail_level: detailed
+      - name: expected_disposition
+        description: Expected supported, clarification, unsupported, refusal, repair, or error outcome.
+        detail_level: moderate
+      - name: expected_behavior
+        description: Observable user-facing result and relevant state transitions.
+        detail_level: detailed
+      - name: failure_signal
+        description: Exact output, invariant violation, side effect, or threshold breach indicating failure.
+        detail_level: detailed
+      - name: priority
+        description: P1, P2, or P3 based on user harm and likelihood.
+        detail_level: brief
+      - name: automation_level
+        description: Deterministic unit, property-based, integration, live-model, browser, or manual test.
+        detail_level: brief
+      - name: integration_surface
+        description: Core advisor, exact engine, LLM provider, Gradio, MCP, renderer, or deployment.
+        detail_level: brief
+  - name: oracle_and_provenance
+    fields:
+      - name: independent_oracle
+        description: Independent exact formula, direct engine call, paper theorem, schema, security rule, or human rubric.
+        detail_level: detailed
+      - name: parameter_provenance
+        description: Which inputs were explicit, inferred, defaulted, normalized, or repaired.
+        detail_level: detailed
+      - name: model_provider_version
+        description: Model, provider, and deployment version used for live inference.
+        detail_level: moderate
+      - name: prompt_or_schema_version
+        description: Hash or identifier for system prompt, response schema, and fixture corpus.
+        detail_level: moderate
+      - name: assumptions
+        description: Explicit assumptions required to interpret the output or expected result.
+        detail_level: detailed
+      - name: uncertainty
+        description: Ambiguity or evidence limitation that remains after execution.
+        detail_level: moderate
+  - name: execution_evidence
+    fields:
+      - name: environment
+        description: Local/staging/live target, browser, viewport, and relevant configuration without secrets.
+        detail_level: moderate
+      - name: latency
+        description: Per-stage and total elapsed time, including each model call.
+        detail_level: brief
+      - name: resource_cost
+        description: Input/output tokens, request count, and estimated cost when available.
+        detail_level: moderate
+      - name: evidence_artifact
+        description: Sanitized logs, output JSON, screenshots, trace, and test command/result.
+        detail_level: detailed
+      - name: privacy_constraints
+        description: Redaction policy for prompts, secrets, personal data, and provider telemetry.
+        detail_level: moderate
+      - name: side_effects
+        description: Tool calls, network requests, file writes, state changes, or confirmation none occurred.
+        detail_level: moderate
+      - name: disposition
+        description: PASS, FAIL, PARTIAL, BLOCKED, or NOT RUN with reason.
+        detail_level: brief
+uncertain:
+  - Unsupported-game taxonomy and exact product refusal wording require product-owner agreement.
+  - Live-model acceptance thresholds depend on chosen provider/model and version drift.
+  - Load-test request volume and spend ceiling require an isolated staging gateway and explicit budget.
+  - Cross-browser support matrix should follow the product's supported-browser policy.

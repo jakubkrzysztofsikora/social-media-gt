@@ -1,0 +1,134 @@
+topic: "Stress-testing LLM-assisted game-theory analysis and exact-arithmetic proofs"
+research_window: "since 2024 through 2026-10-27"
+source_note: "Web-research agent dispatch failed because the task call supplied sourceSession for a non-seance agent; direct searches and primary sources were used instead."
+items:
+  - id: scope-disposition
+    name: "Supported, unclear, and unsupported request classification"
+    rationale: "A clear auction was mapped onto unrelated default scenarios; scope rejection is the highest current product gap."
+    approach: "Create labeled supported/clarify/unsupported/refuse cases; require unsupported requests to stop before calculations."
+    sources:
+      - "https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/tree/main/2026/final"
+      - "https://alignment.openai.com/model-spec-evals/"
+  - id: clarification-dialogue
+    name: "Clarification gate and multi-turn continuation"
+    rationale: "The gate currently asks about players/actions/cooperation but may ask irrelevant questions for non-games."
+    approach: "Test vague, partially specified, and already-clear prompts; assert no math before clarification and continuity after answers."
+    sources:
+      - "https://alignment.openai.com/model-spec-evals/"
+      - "https://www.nist.gov/publications/aria-evaluation-planning-manual-elements-aria-style-ai-evaluations"
+  - id: semantic-parameter-mapping
+    name: "Units, denominators, subgroup shares, and contextual mapping"
+    rationale: "A denominator mismatch changed gamma from 9/40 to 1/4 while checks stayed green."
+    approach: "Pair every ratio with explicit population denominators; test equivalent representations and compare normalized values with independent calculations."
+    sources:
+      - "https://docs.python.org/3/library/fractions.html"
+      - "https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/tree/main/2026/final"
+  - id: exact-math-oracles
+    name: "Differential and property-based verification of exact proofs"
+    rationale: "Self-consistency checks do not establish that inferred parameters represent the user's case."
+    approach: "Compare each displayed result with direct engine calls, paper fixtures, invariants, and property-generated boundary inputs; retain exact Fraction values."
+    sources:
+      - "https://docs.python.org/3/library/fractions.html"
+      - "https://hypothesis.readthedocs.io/en/latest/"
+      - "../social-media-proof/results/parity_check.py"
+  - id: parameter-domain-behavior
+    name: "Boundary repair, singularities, and impossible combinations"
+    rationale: "Legal-looking parameters can still create a singular fixed-point operator or failed proof checks."
+    approach: "Generate below/on/above-boundary values and require explicit repair notes or pre-calculation errors; never treat failed checks as successful evidence."
+    sources:
+      - "https://docs.python.org/3/library/fractions.html"
+      - "https://hypothesis.readthedocs.io/en/latest/"
+  - id: model-output-contract
+    name: "Structured inference schema and retry/error behavior"
+    rationale: "Parseable but malformed JSON can otherwise trigger crashes or default-only reports."
+    approach: "Use schema fixtures for incomplete, wrong-type, oversized, and contradictory responses; assert one retry then structured failure."
+    sources:
+      - "https://developers.openai.com/cookbook/topic/evals"
+      - "https://alignment.openai.com/model-spec-evals/"
+  - id: prompt-injection
+    name: "Direct and indirect injection resistance"
+    rationale: "Untrusted scenario text shares the model context with analysis instructions."
+    approach: "Test instruction overrides in direct, quoted, copied-document, multilingual, encoded, and split-field forms; check output semantics, not keyword absence alone."
+    sources:
+      - "https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM01_PromptInjection.md"
+      - "https://alignment.openai.com/model-spec-evals/"
+  - id: disclosure-and-capabilities
+    name: "Secret leakage, tool boundaries, and side effects"
+    rationale: "Prompt injection becomes severe when outputs reach secrets, tools, or external channels."
+    approach: "Use synthetic secret canaries; verify no credential echo, tool invocation, filesystem/network access, or cross-session data."
+    sources:
+      - "https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM02_SensitiveInformationDisclosure.md"
+      - "https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM03_ExcessiveAgency.md"
+  - id: output-rendering
+    name: "Markdown, LaTeX, HTML, and browser-output safety"
+    rationale: "LLM-derived text and math render in browser components; escaped delimiters and HTML need independent tests."
+    approach: "Test XSS payloads, image/link fetches, escaped/unmatched dollars, nested math, Unicode, and malformed Markdown in an isolated browser."
+    sources:
+      - "https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM10_ImproperOutputHandling.md"
+      - "https://hypothesis.readthedocs.io/en/latest/"
+  - id: calibration-and-conclusions
+    name: "Default provenance and practical conclusion grounding"
+    rationale: "Paper defaults may be mathematically correct but irrelevant to an unquantified user's situation."
+    approach: "Track parameter provenance, label defaults, and verify every conclusion number against exact evidence; separate conditional model output from empirical claims."
+    sources:
+      - "https://developers.openai.com/cookbook/topic/evals"
+      - "https://alignment.openai.com/model-spec-evals/"
+  - id: resource-consumption
+    name: "Token, latency, queue, and cost exhaustion"
+    rationale: "Each full analysis makes two LLM calls; long inputs and repeated requests can multiply cost."
+    approach: "Set token/input limits, per-user budgets, call/time caps, queue caps, and load profiles; test graceful degradation and partial second-call failure."
+    sources:
+      - "https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM06_UnboundedConsumption.md"
+      - "https://www.nist.gov/publications/aria-evaluation-planning-manual-elements-aria-style-ai-evaluations"
+  - id: channel-parity
+    name: "Gradio/MCP contract and state parity"
+    rationale: "The same analysis core is exposed through multiple surfaces with different serialization and session handling."
+    approach: "Run identical fixtures through direct core, Gradio, and MCP; compare parameters, results, checks, clarification status, and error envelope."
+    sources:
+      - "https://developers.openai.com/cookbook/examples/partners/harness_aware_plugin_evals/harness_aware_plugin_evals.md"
+      - "https://www.nist.gov/publications/aria-evaluation-planning-manual-elements-aria-style-ai-evaluations"
+  - id: browser-accessibility
+    name: "Cross-browser, responsive, and accessibility behavior"
+    rationale: "Math-heavy output, long tables, and queue states can fail visually despite passing backend tests."
+    approach: "Exercise Chrome/Firefox/Safari/Edge, mobile/desktop, keyboard-only controls, dark mode, console errors, and no-overflow checks."
+    sources:
+      - "https://www.nist.gov/publications/aria-evaluation-planning-manual-elements-aria-style-ai-evaluations"
+  - id: reproducibility-and-drift
+    name: "Prompt/model/paper versioning and reproducible evidence"
+    rationale: "Model updates and paper/toolkit changes can shift outputs without changing user input."
+    approach: "Record model/version, prompt hash, sanitized inputs, exact normalized params, check results, and source commit; rerun golden parity cases on upgrades."
+    sources:
+      - "https://developers.openai.com/cookbook/topic/evals"
+      - "../social-media-proof/results/parity_check.py"
+execution:
+  batch_size: 4
+  items_per_agent: 2
+  output_dir: ./results
+
+research_guidance:
+  - source: "NIST ARIA Evaluation Planning Manual (NIST AI 200-3, 2026)"
+    finding: "Holistic evaluations combine model testing, red teaming, and user testing."
+    approach: "Keep deterministic oracle checks, adaptive adversarial runs, and browser/user flows as distinct evidence streams."
+    url: "https://doi.org/10.6028/NIST.AI.200-3"
+  - source: "OWASP GenAI LLM Top 10 (2026)"
+    finding: "Prompt injection has no reliable prompt-only prevention; constrain capabilities and outputs, test attack surfaces and encodings, and bound consumption."
+    approach: "Assume instructions can be overridden; test direct/indirect/adaptive inputs, isolate secrets/tools, sanitize outputs by destination, block unintended external fetches, and set token/cost/queue budgets."
+    urls:
+      - "https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM01_PromptInjection.md"
+      - "https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM02_SensitiveInformationDisclosure.md"
+      - "https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM06_UnboundedConsumption.md"
+      - "https://github.com/GenAI-Security-Project/GenAI-LLM-Top10/blob/main/2026/final/LLM10_ImproperOutputHandling.md"
+  - source: "OpenAI Model Spec Evals (2026)"
+    finding: "Focus-area prompts pair with explicit rubrics; rubrics should be checked against hypothetical good/bad responses. The published dataset is broad but not adversarially exhaustive."
+    approach: "Create a prompt corpus with per-case rubrics, validate each rubric against paired compliant/non-compliant outputs, and maintain separate adversarial suites."
+    url: "https://alignment.openai.com/model-spec-evals/"
+  - source: "OpenAI Evals Cookbook"
+    finding: "MCP-backed systems benefit from direct tool tests, controlled model loops, shared test cases, and trace-based diagnosis."
+    approach: "Run one fixture through core, MCP, and web; compare normalized inputs, tool payloads, exact evidence, and traces."
+    url: "https://developers.openai.com/cookbook/topic/evals"
+  - source: "Hypothesis and Python Fraction documentation"
+    finding: "Property-based tests generate and shrink boundary cases; Fraction preserves exact rational values and raises on denominator zero."
+    approach: "Generate legal/illegal parameter combinations; assert invariants and compare against an independently computed exact oracle."
+    urls:
+      - "https://hypothesis.readthedocs.io/en/latest/"
+      - "https://docs.python.org/3/library/fractions.html"
