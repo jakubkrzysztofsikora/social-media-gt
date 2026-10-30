@@ -1,2 +1,12 @@
-sympy>=1.13
+sympy==1.14.0
 z3-solver>=4.12
+gradio==6.30.0
+mcp==2.3.0
+openai>=1.40
+python-dotenv>=1.0
+pytest>=8
+pygambit==16.7.0
+open_spiel==2.0.2
+scipy==1.18.1
+numpy>=2.0
+cryptography==50.0.2

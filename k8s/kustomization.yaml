@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: social-gt
+resources:
+- namespace.yaml
+- ts-funnel.yaml
+- deployment.yaml
+- game-case-pvc.yaml
+# game-case-secrets.yaml is a TEMPLATE ONLY - never apply it, it holds empty
+# placeholders and would overwrite the live secret. Create the real secret with:
+#   kubectl -n social-gt create secret generic game-case-secrets \
+#     --from-literal=GT_APP_USERNAME=owner \
+#     --from-literal=GT_APP_PASSWORD='<password>' \
+#     --from-literal=GT_CASE_ENCRYPTION_KEY='<base64 of 32 random bytes>' \
+#     --from-literal=GT_CASE_DB_PATH=/data/game-cases.sqlite3 \
+#     --from-literal=GT_SHARE_TOKEN='<share worker secret>'

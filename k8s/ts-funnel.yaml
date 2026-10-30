@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ts-funnel-config
+  namespace: social-gt
+data:
+  serve.json: |
+    {
+      "TCP": {
+        "443": {"HTTPS": true},
+        "80": {"TCPForward": "127.0.0.1:7860"}
+      },
+      "Web": {"${TS_CERT_DOMAIN}:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:7860"}}}},
+      "AllowFunnel": {"${TS_CERT_DOMAIN}:443": true}
+    }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ts-funnel-state
+  namespace: social-gt
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 128Mi

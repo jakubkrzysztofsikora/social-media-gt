@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: social-gt
+  namespace: social-gt
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: social-gt
+  template:
+    metadata:
+      labels:
+        app: social-gt
+    spec:
+      imagePullSecrets:
+      - name: forgejo-registry
+      containers:
+      - name: app
+        image: forgejo.tail5d39b4.ts.net/jakub/social-gt@sha256:a12a78361570205301d92699b386ea84c405b37b74cd9b292833063e814ccce7
+        envFrom:
+        - secretRef:
+            name: gt-llm
+        - secretRef:
+            name: game-case-secrets
+        ports:
+        - containerPort: 7860
+        readinessProbe:
+          httpGet: { path: "/", port: 7860 }
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          httpGet: { path: "/", port: 7860 }
+          initialDelaySeconds: 15
+          periodSeconds: 20
+          timeoutSeconds: 5
+          failureThreshold: 6
+        resources:
+          requests:
+            cpu: 250m
+            memory: 384Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+        volumeMounts:
+        - { name: case-data, mountPath: /data }
+      - name: ts-funnel
+        image: tailscale/tailscale:stable
+        env:
+        - name: TS_AUTHKEY
+          valueFrom:
+            secretKeyRef: { name: ts-sidecar-auth, key: TS_AUTHKEY }
+        - name: TS_HOSTNAME
+          value: social-gt
+        - name: TS_USERSPACE
+          value: "true"
+        - name: TS_SERVE_CONFIG
+          value: /config/serve.json
+        - name: TS_STATE_DIR
+          value: /var/lib/tailscale
+        - name: TS_KUBE_SECRET
+          value: ""
+        volumeMounts:
+        - { name: config, mountPath: /config, readOnly: true }
+        - { name: state, mountPath: /var/lib/tailscale }
+      volumes:
+      - name: config
+        configMap: { name: ts-funnel-config }
+      - name: state
+        persistentVolumeClaim: { claimName: ts-funnel-state }
+      - name: case-data
+        persistentVolumeClaim: { claimName: game-case-data }

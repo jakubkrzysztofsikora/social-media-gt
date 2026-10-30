@@ -1,0 +1,15 @@
+.venv/
+.git/
+.env
+__pycache__/
+.pytest_cache/
+.gradio/
+.21st/
+<project>/
+*.pyc
+*.png
+*.webp
+test_*.py
+README.md
+Dockerfile
+k8s/
